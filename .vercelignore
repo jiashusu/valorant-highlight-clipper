@@ -1,0 +1,14 @@
+assets/
+bin/
+src/
+static/
+tests/
+requirements.txt
+*.py
+*.npy
+*.png
+logs/
+outputs/
+.venv/
+.env
+.env.*
