@@ -4,8 +4,37 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
+find_python() {
+  for candidate in python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      if "$candidate" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+      then
+        command -v "$candidate"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+BASE_PYTHON="$(find_python)"
+if [ -z "$BASE_PYTHON" ]; then
+  echo "需要 Python 3.10 或更高版本。"
+  exit 1
+fi
+
 if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+  "$BASE_PYTHON" -m venv .venv
+elif ! ".venv/bin/python" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+then
+  rm -rf .venv
+  "$BASE_PYTHON" -m venv .venv
 fi
 
 source ".venv/bin/activate"
