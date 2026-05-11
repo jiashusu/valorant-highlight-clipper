@@ -5,11 +5,13 @@ import queue
 import subprocess
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
 
 from .core import DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video
+from .update_checker import UpdateResult, check_for_update
 
 
 APP_TITLE = "Valorant 高光剪辑"
@@ -55,6 +57,7 @@ class DesktopApp:
 
         self._build_ui()
         self.root.after(100, self._drain_events)
+        self.root.after(1500, lambda: self.check_for_updates(manual=False))
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -65,6 +68,9 @@ class DesktopApp:
         header.columnconfigure(1, weight=1)
         ttk.Label(header, text=APP_TITLE, font=("", 18, "bold")).grid(row=0, column=0, sticky="w")
         ttk.Label(header, textvariable=self.status).grid(row=0, column=1, sticky="e")
+        ttk.Button(header, text="检查更新", command=lambda: self.check_for_updates(manual=True)).grid(
+            row=0, column=2, sticky="e", padx=(10, 0)
+        )
 
         body = ttk.PanedWindow(self.root, orient="horizontal")
         body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 10))
@@ -241,6 +247,19 @@ class DesktopApp:
         self.status.set("扫描中")
         self._run_thread(self._scan_worker)
 
+    def check_for_updates(self, manual: bool = True) -> None:
+        if manual:
+            self.status.set("检查更新中")
+        thread = threading.Thread(target=self._update_worker, args=(manual,), daemon=True)
+        thread.start()
+
+    def _update_worker(self, manual: bool) -> None:
+        try:
+            result = check_for_update()
+            self.events.put(("update", (manual, result)))
+        except Exception as exc:
+            self.events.put(("update_error", (manual, str(exc))))
+
     def _scan_worker(self) -> None:
         try:
             videos = discover_videos(Path(self.source_path.get()), recursive=self.recursive.get())
@@ -325,11 +344,41 @@ class DesktopApp:
                 self.log_box.insert("end", f"{payload}\n")
                 self.log_box.see("end")
                 messagebox.showerror(APP_TITLE, str(payload))
+            elif kind == "update":
+                manual, result = payload  # type: ignore[misc]
+                self._handle_update_result(bool(manual), result)  # type: ignore[arg-type]
+            elif kind == "update_error":
+                manual, message = payload  # type: ignore[misc]
+                self._handle_update_error(bool(manual), str(message))
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 if self.status.get() != "出错":
                     self.status.set("完成")
         self.root.after(100, self._drain_events)
+
+    def _handle_update_result(self, manual: bool, result: UpdateResult) -> None:
+        if result.update_available:
+            self.status.set(f"有新版本: {result.remote_short}")
+            should_open = messagebox.askyesno(
+                APP_TITLE,
+                f"{result.message}\n\n是否打开 GitHub Actions 下载新版 macOS App？",
+            )
+            if should_open:
+                webbrowser.open(result.download_url)
+            return
+
+        if manual:
+            self.status.set("已是最新版本")
+            messagebox.showinfo(APP_TITLE, result.message)
+        elif self.status.get() == "检查更新中":
+            self.status.set("准备就绪")
+
+    def _handle_update_error(self, manual: bool, message: str) -> None:
+        if manual:
+            self.status.set("检查更新失败")
+            messagebox.showwarning(APP_TITLE, message)
+        elif self.status.get() == "检查更新中":
+            self.status.set("准备就绪")
 
     def _render_videos(self, videos) -> None:
         self.videos = [video.__dict__ for video in videos]

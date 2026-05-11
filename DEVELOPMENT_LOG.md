@@ -31,6 +31,11 @@
   - 原因：桌面 GUI 中导出片段表格的 `path` 列少了宽度配置，启动时报 `ValueError`。
   - 修复：补齐 `("path", "文件", 360)`。
 - 删除 Windows 相关内容，保留 macOS 项目方向。
+- 增加更新检查功能：
+  - App 启动后自动检查一次更新。
+  - 标题栏提供“检查更新”按钮。
+  - 优先使用 GitHub API；私有仓库不可访问时，回退到本机已登录的 `gh` CLI。
+  - 发现远端 `main` 提交比当前 App 打包提交更新时，弹窗提示并可打开 GitHub Actions 下载新版 macOS App。
 
 ### 当前目录定位
 
@@ -49,6 +54,7 @@
 - 单元测试通过：`4 passed`
 - macOS `.app` 命令行启动验证通过，不再出现启动即崩溃。
 - GitHub macOS 构建 workflow 可用。
+- 更新检查依赖当前机器可访问 GitHub；由于仓库是 private，未登录 `gh` 时会检查失败。
 
 ### 后续建议
 
