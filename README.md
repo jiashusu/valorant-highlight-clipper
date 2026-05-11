@@ -16,7 +16,7 @@ A local macOS web app that scans VALORANT recordings and exports highlight clips
 
 ## Requirements
 
-- macOS
+- macOS, or Windows when using the packaged `.exe`
 - Python 3.11+
 - `ffmpeg` and `ffprobe`
 
@@ -74,6 +74,27 @@ osacompile -o "bin/Valorant Clipper Control.app" "bin/Valorant Clipper Control.a
 osacompile -o "bin/Valorant Highlight Clipper.app" "bin/Valorant Highlight Clipper.applescript"
 ```
 
+## Windows EXE
+
+The Windows build is produced by GitHub Actions because PyInstaller needs a real
+Windows runner to create a Windows `.exe`.
+
+Download the artifact from the latest **Build Windows EXE** workflow run, or build
+on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\build_windows.ps1
+```
+
+The executable is written to:
+
+```text
+dist\ValorantHighlightClipper.exe
+```
+
+The packaged build includes `ffmpeg.exe` and `ffprobe.exe`, so a normal Windows
+user only needs to double-click the exe.
+
 ## Default Paths
 
 The app defaults to:
@@ -129,4 +150,3 @@ tests/                      lightweight core tests
 ## License
 
 Personal project. Check upstream model/assets licensing before redistributing beyond your own account.
-

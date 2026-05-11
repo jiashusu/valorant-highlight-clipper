@@ -7,6 +7,7 @@ __pycache__/
 logs/
 outputs/
 dist/
+vendor/ffmpeg/
 .valorant_clipper.pid
 .pytest_cache/
 .vercel/

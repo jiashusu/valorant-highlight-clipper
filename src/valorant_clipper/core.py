@@ -13,8 +13,11 @@ from typing import Callable, Iterable
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
+from .paths import resource_root, runtime_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+PROJECT_ROOT = resource_root()
+RUNTIME_ROOT = runtime_root()
 ASSET_DIR = PROJECT_ROOT / "assets" / "valorant_clipper"
 NETWORK_PATH = ASSET_DIR / "valorant.npy"
 MASK_PATH = ASSET_DIR / "valorant-mask.png"
@@ -23,7 +26,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".flv"}
 DEFAULT_SOURCE_DIR = Path(
     os.getenv("VALORANT_CLIPS_DIR", str(Path.home() / "Movies" / "VALORANT_CLIPS"))
 )
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "valorant_highlights"
+DEFAULT_OUTPUT_DIR = RUNTIME_ROOT / "outputs" / "valorant_highlights"
 DEFAULT_EXCLUDES = {
     ".venv",
     "video_env",
@@ -91,14 +94,32 @@ class ValorantNetwork:
         return values
 
 
+def tool_filename(tool: str) -> str:
+    return f"{tool}.exe" if os.name == "nt" else tool
+
+
+def resolve_tool(tool: str) -> str | None:
+    bundled_paths = [
+        PROJECT_ROOT / "ffmpeg" / tool_filename(tool),
+        PROJECT_ROOT / "vendor" / "ffmpeg" / tool_filename(tool),
+    ]
+    for path in bundled_paths:
+        if path.exists():
+            return str(path)
+    return shutil.which(tool)
+
+
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    resolved_command = list(command)
+    if resolved_command and resolved_command[0] in {"ffmpeg", "ffprobe"}:
+        resolved_command[0] = resolve_tool(resolved_command[0]) or resolved_command[0]
+    return subprocess.run(resolved_command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def require_ffmpeg() -> None:
     for tool in ("ffmpeg", "ffprobe"):
-        if shutil.which(tool) is None:
-            raise RuntimeError(f"{tool} is not installed or not on PATH")
+        if resolve_tool(tool) is None:
+            raise RuntimeError(f"{tool} is not bundled and is not installed on PATH")
 
 
 def ffprobe_json(path: Path) -> dict:

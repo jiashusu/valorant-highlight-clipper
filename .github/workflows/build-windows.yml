@@ -1,0 +1,61 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "assets/**"
+      - "src/**"
+      - "static/**"
+      - "tests/**"
+      - "windows/**"
+      - "requirements.txt"
+      - ".github/workflows/build-windows.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller pytest
+
+      - name: Download FFmpeg for Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vendor = "vendor\ffmpeg"
+          New-Item -ItemType Directory -Force -Path $vendor | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP "ffmpeg-release-essentials.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "ffmpeg-release-essentials"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $extract -Force
+          $ffmpegRoot = Get-ChildItem $extract -Directory | Select-Object -First 1
+          Copy-Item (Join-Path $ffmpegRoot.FullName "bin\ffmpeg.exe") $vendor -Force
+          Copy-Item (Join-Path $ffmpegRoot.FullName "bin\ffprobe.exe") $vendor -Force
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "src"
+          python -m pytest -q
+
+      - name: Build executable
+        run: pyinstaller --noconfirm --clean windows\ValorantHighlightClipper.spec
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ValorantHighlightClipper-Windows
+          path: dist/ValorantHighlightClipper.exe

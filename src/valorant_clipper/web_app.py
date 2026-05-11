@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 import subprocess
 import threading
 import uuid
@@ -14,9 +16,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .core import DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video
+from .paths import resource_root
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = resource_root()
 STATIC_DIR = PROJECT_ROOT / "static" / "valorant_clipper"
 
 app = FastAPI(title="Valorant Highlight Clipper")
@@ -68,6 +71,9 @@ def defaults() -> dict[str, str]:
 
 @app.post("/api/choose-path")
 def choose_path(request: PathChoiceRequest) -> dict[str, str]:
+    if os.name == "nt":
+        return choose_windows_path(request)
+
     if request.kind == "file":
         script = (
             f'set chosenPath to choose file with prompt "{request.prompt}"\n'
@@ -88,6 +94,32 @@ def choose_path(request: PathChoiceRequest) -> dict[str, str]:
     if result.returncode != 0:
         raise HTTPException(status_code=400, detail=result.stderr.strip() or "已取消选择")
     return {"path": result.stdout.strip()}
+
+
+def choose_windows_path(request: PathChoiceRequest) -> dict[str, str]:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        if request.kind == "file":
+            path = filedialog.askopenfilename(
+                title=request.prompt,
+                filetypes=[
+                    ("Video files", "*.mp4 *.mov *.mkv *.avi *.m4v *.flv"),
+                    ("All files", "*.*"),
+                ],
+            )
+        else:
+            path = filedialog.askdirectory(title=request.prompt)
+    finally:
+        root.destroy()
+
+    if not path:
+        raise HTTPException(status_code=400, detail="已取消选择")
+    return {"path": str(Path(path))}
 
 
 @app.get("/api/videos")
@@ -181,5 +213,10 @@ def open_folder(path: str) -> dict[str, str]:
         folder = folder.parent
     if not folder.exists():
         raise HTTPException(status_code=404, detail="folder not found")
-    subprocess.Popen(["open", str(folder)])
+    if os.name == "nt":
+        os.startfile(str(folder))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(folder)])
+    else:
+        subprocess.Popen(["xdg-open", str(folder)])
     return {"status": "ok"}
