@@ -1,4 +1,4 @@
-name: Build Desktop Apps
+name: Build macOS App
 
 on:
   workflow_dispatch:
@@ -6,21 +6,6 @@ on:
     branches: [main]
 
 jobs:
-  windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Build Windows exe
-        shell: pwsh
-        run: windows\build_windows.ps1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ValorantHighlightClipper-Windows
-          path: dist/ValorantHighlightClipper.exe
-
   macos:
     runs-on: macos-14
     steps:
