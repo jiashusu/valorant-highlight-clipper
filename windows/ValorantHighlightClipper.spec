@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-project = Path(SPECPATH).parent.parent
+project = Path.cwd()
 
 datas = [
     (str(project / "assets" / "valorant_clipper"), "assets/valorant_clipper"),
