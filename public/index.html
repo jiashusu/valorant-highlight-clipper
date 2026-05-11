@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Valorant Highlight Clipper</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d1117;
+        --panel: #151b23;
+        --ink: #f0f3f6;
+        --muted: #9aa7b2;
+        --accent: #ff4655;
+        --line: #2d3640;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+        font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        width: min(920px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 64px 0;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(34px, 6vw, 68px);
+        line-height: 1;
+      }
+
+      p {
+        color: var(--muted);
+        margin: 16px 0 0;
+        max-width: 720px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        text-decoration: none;
+        font-weight: 750;
+      }
+
+      .primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      section {
+        margin-top: 38px;
+        padding: 22px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 20px;
+      }
+
+      code {
+        display: block;
+        overflow-x: auto;
+        padding: 14px;
+        margin-top: 12px;
+        border-radius: 6px;
+        background: #0a0d12;
+        color: #dbe7f3;
+        white-space: pre;
+      }
+
+      ul {
+        margin: 12px 0 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Valorant Highlight Clipper</h1>
+      <p>
+        A local macOS web app for automatically clipping VALORANT highlights from
+        kill-feed events. Vercel hosts this project page; video processing runs on
+        your own Mac so it can access local recordings and ffmpeg.
+      </p>
+      <div class="actions">
+        <a class="button primary" href="https://github.com/jiashusu/valorant-highlight-clipper">View on GitHub</a>
+        <a class="button" href="#quick-start">Quick start</a>
+      </div>
+
+      <section>
+        <h2>Why local?</h2>
+        <p>
+          VALORANT recordings are often several GB. The clipper needs local file
+          access, macOS picker support, and long-running ffmpeg jobs. That makes a
+          local app the right fit, while Vercel works well as the public project page.
+        </p>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <code>git clone https://github.com/jiashusu/valorant-highlight-clipper.git
+cd valorant-highlight-clipper
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+bin/valorant_clipper_control.command start</code>
+      </section>
+
+      <section>
+        <h2>Features</h2>
+        <ul>
+          <li>Drag video files or folders into the local web UI.</li>
+          <li>Export detected clips with estimated kill counts.</li>
+          <li>Strict filtering mode helps reduce teammate-kill false positives.</li>
+          <li>Start, stop, restart, and status controls for the local server.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>
+

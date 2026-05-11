@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Valorant Highlight Clipper</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <h1>Valorant Highlight Clipper</h1>
+          <p>本地识别击杀信息，自动剪出无畏契约高光片段。</p>
+        </div>
+        <button id="refreshVideos" class="iconButton" title="刷新视频列表">↻</button>
+      </section>
+
+      <section class="workspace">
+        <aside class="panel controls">
+          <div id="dropZone" class="dropZone">
+            <strong>拖入视频或文件夹</strong>
+            <span>也可以用下面的按钮从系统里选择。</span>
+          </div>
+
+          <label>
+            素材目录
+            <input id="sourceDir" autocomplete="off" />
+          </label>
+          <div class="buttonRow">
+            <button id="chooseFolderButton">选择文件夹</button>
+            <button id="chooseFileButton">选择视频文件</button>
+          </div>
+          <label class="checkRow">
+            <input id="recursive" type="checkbox" />
+            <span>递归扫描子文件夹</span>
+          </label>
+          <button id="scanButton">扫描视频</button>
+
+          <label>
+            选择视频
+            <select id="videoSelect"></select>
+          </label>
+
+          <label>
+            输出目录
+            <input id="outputDir" autocomplete="off" />
+          </label>
+          <div class="buttonRow">
+            <button id="chooseOutputButton">选择输出目录</button>
+          </div>
+
+          <div class="gridTwo">
+            <label>
+              置信度
+              <input id="confidence" type="number" min="0.01" max="0.99" step="0.01" value="0.8" />
+            </label>
+            <label>
+              抽帧率
+              <input id="framerate" type="number" min="1" max="30" step="1" value="8" />
+            </label>
+          </div>
+
+          <div class="gridThree">
+            <label>
+              击杀前
+              <input id="secondsBefore" type="number" min="0" max="30" step="0.25" value="4" />
+            </label>
+            <label>
+              击杀后
+              <input id="secondsAfter" type="number" min="0" max="30" step="0.25" value="0.5" />
+            </label>
+            <label>
+              合并间隔
+              <input id="mergeGap" type="number" min="0" max="60" step="0.5" value="3" />
+            </label>
+          </div>
+
+          <label>
+            只测试前 N 秒
+            <input id="maxSeconds" type="number" min="1" step="1" placeholder="留空就是完整视频" />
+          </label>
+
+          <div class="gridTwo">
+            <label>
+              最短提示秒数
+              <input id="minEventSeconds" type="number" min="0" max="2" step="0.05" value="0.45" />
+            </label>
+            <label class="checkRow compactCheck">
+              <input id="strictOwnKills" type="checkbox" checked />
+              <span>严格过滤队友击杀</span>
+            </label>
+          </div>
+
+          <label class="checkRow">
+            <input id="copyStreams" type="checkbox" />
+            <span>极速无损切片</span>
+          </label>
+
+          <button id="startButton" class="primary">开始自动剪辑</button>
+        </aside>
+
+        <section class="panel results">
+          <div class="statusLine">
+            <div>
+              <strong id="statusText">准备就绪</strong>
+              <span id="statusDetail"></span>
+            </div>
+            <span id="videoCount"></span>
+          </div>
+          <div class="progressTrack"><div id="progressBar"></div></div>
+
+          <div id="clipGrid" class="clipGrid empty">
+            <p>剪辑结果会出现在这里。</p>
+          </div>
+
+          <details class="logs" open>
+            <summary>运行日志</summary>
+            <pre id="logBox"></pre>
+          </details>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
