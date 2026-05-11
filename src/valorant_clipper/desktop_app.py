@@ -15,6 +15,7 @@ from .update_checker import UpdateResult, check_for_update
 
 
 APP_TITLE = "Valorant 高光剪辑"
+UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 
 
 def open_path(path: Path) -> None:
@@ -54,6 +55,7 @@ class DesktopApp:
         self.selected_video: Path | None = None
         self.worker_thread: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.last_update_prompt_sha: str | None = None
 
         self._build_ui()
         self.root.after(100, self._drain_events)
@@ -358,6 +360,10 @@ class DesktopApp:
 
     def _handle_update_result(self, manual: bool, result: UpdateResult) -> None:
         if result.update_available:
+            if not manual and result.remote_sha == self.last_update_prompt_sha:
+                self._schedule_next_update_check()
+                return
+            self.last_update_prompt_sha = result.remote_sha
             self.status.set(f"有新版本: {result.remote_short}")
             should_open = messagebox.askyesno(
                 APP_TITLE,
@@ -365,6 +371,8 @@ class DesktopApp:
             )
             if should_open:
                 webbrowser.open(result.download_url)
+            if not manual:
+                self._schedule_next_update_check()
             return
 
         if manual:
@@ -372,6 +380,8 @@ class DesktopApp:
             messagebox.showinfo(APP_TITLE, result.message)
         elif self.status.get() == "检查更新中":
             self.status.set("准备就绪")
+        if not manual:
+            self._schedule_next_update_check()
 
     def _handle_update_error(self, manual: bool, message: str) -> None:
         if manual:
@@ -379,6 +389,11 @@ class DesktopApp:
             messagebox.showwarning(APP_TITLE, message)
         elif self.status.get() == "检查更新中":
             self.status.set("准备就绪")
+        if not manual:
+            self._schedule_next_update_check()
+
+    def _schedule_next_update_check(self) -> None:
+        self.root.after(UPDATE_CHECK_INTERVAL_MS, lambda: self.check_for_updates(manual=False))
 
     def _render_videos(self, videos) -> None:
         self.videos = [video.__dict__ for video in videos]
