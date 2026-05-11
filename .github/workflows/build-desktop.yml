@@ -1,0 +1,42 @@
+name: Build Desktop Apps
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Windows exe
+        shell: pwsh
+        run: windows\build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ValorantHighlightClipper-Windows
+          path: dist/ValorantHighlightClipper.exe
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          brew install ffmpeg
+          chmod +x mac/build_mac.sh
+      - name: Build macOS app
+        run: ./mac/build_mac.sh
+      - name: Zip macOS app
+        run: ditto -c -k --sequesterRsrc --keepParent dist/ValorantHighlightClipper.app dist/ValorantHighlightClipper-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ValorantHighlightClipper-macOS
+          path: dist/ValorantHighlightClipper-macOS.zip

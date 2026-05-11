@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+from shutil import which
 
 
 project = Path.cwd()
@@ -10,14 +11,13 @@ datas = [
 ]
 binaries = []
 
-ffmpeg_dir = project / "vendor" / "ffmpeg"
-for binary_name in ("ffmpeg.exe", "ffprobe.exe"):
-    binary_path = ffmpeg_dir / binary_name
-    if binary_path.exists():
-        binaries.append((str(binary_path), "ffmpeg"))
+for tool in ("ffmpeg", "ffprobe"):
+    tool_path = which(tool)
+    if tool_path:
+        binaries.append((tool_path, "ffmpeg"))
 
 a = Analysis(
-    [str(project / "windows" / "launcher.py")],
+    [str(project / "mac" / "launcher.py")],
     pathex=[str(project / "src")],
     binaries=binaries,
     datas=datas,
@@ -34,20 +34,32 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="ValorantHighlightClipper",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name="ValorantHighlightClipper",
+)
+app = BUNDLE(
+    coll,
+    name="ValorantHighlightClipper.app",
+    icon=None,
+    bundle_identifier="com.jiashusu.valorant-highlight-clipper",
 )
