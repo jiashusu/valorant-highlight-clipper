@@ -10,3 +10,4 @@ dist/
 .valorant_clipper.pid
 .pytest_cache/
 .vercel/
+.vercel
