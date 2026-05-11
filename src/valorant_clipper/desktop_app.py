@@ -182,7 +182,7 @@ class DesktopApp:
             ("start", "开始", 70),
             ("end", "结束", 70),
             ("duration", "长度", 70),
-            ("path", "文件"),
+            ("path", "文件", 360),
         ]:
             self.clip_list.heading(key, text=label)
             self.clip_list.column(key, width=width, stretch=(key == "path"), anchor="center" if key != "path" else "w")
