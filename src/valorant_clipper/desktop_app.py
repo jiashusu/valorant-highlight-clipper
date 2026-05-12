@@ -2,20 +2,26 @@ from __future__ import annotations
 
 import os
 import queue
+import hashlib
 import subprocess
 import sys
 import threading
+import tempfile
 import webbrowser
 from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
 
-from .core import DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video
+from PIL import Image, ImageTk
+
+from .core import ClipSegment, DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video, resolve_tool
 from .update_checker import UpdateResult, check_for_update
 
 
 APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
+PREVIEW_FPS = 12
+PREVIEW_WIDTH = 560
 
 
 def open_path(path: Path) -> None:
@@ -52,10 +58,22 @@ class DesktopApp:
         self.status = StringVar(value="准备就绪")
 
         self.videos: list[dict[str, object]] = []
+        self.clips: list[ClipSegment] = []
         self.selected_video: Path | None = None
+        self.selected_clip: ClipSegment | None = None
         self.worker_thread: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.last_update_prompt_sha: str | None = None
+        self.preview_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_previews"
+        self.preview_frames: list[Path] = []
+        self.preview_index = 0
+        self.preview_after_id: str | None = None
+        self.preview_token = 0
+        self.preview_photo: ImageTk.PhotoImage | None = None
+        self.is_preview_playing = False
+        self.preview_status = StringVar(value="选择导出片段后可在这里播放")
+        self.preview_badge = StringVar(value="约 - 杀")
+        self.preview_detail = StringVar(value="")
 
         self._build_ui()
         self.root.after(100, self._drain_events)
@@ -168,15 +186,45 @@ class DesktopApp:
 
     def _build_right_panel(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=2)
+        parent.rowconfigure(1, weight=1)
         parent.rowconfigure(3, weight=3)
+        parent.rowconfigure(5, weight=2)
 
         ttk.Label(parent, text="处理日志").grid(row=0, column=0, sticky="w")
         self.log_box = self._text(parent, row=1)
 
-        ttk.Label(parent, text="导出片段").grid(row=2, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(parent, text="片段预览").grid(row=2, column=0, sticky="w", pady=(12, 0))
+        player = ttk.Frame(parent)
+        player.grid(row=3, column=0, sticky="nsew")
+        player.columnconfigure(0, weight=1)
+        player.rowconfigure(1, weight=1)
+
+        preview_header = ttk.Frame(player)
+        preview_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        preview_header.columnconfigure(1, weight=1)
+        self.preview_badge_label = ttk.Label(preview_header, textvariable=self.preview_badge)
+        self.preview_badge_label.grid(row=0, column=0, sticky="w")
+        ttk.Label(preview_header, textvariable=self.preview_detail).grid(row=0, column=1, sticky="w", padx=(12, 0))
+
+        self.preview_image = ttk.Label(
+            player,
+            textvariable=self.preview_status,
+            anchor="center",
+            relief="sunken",
+            padding=8,
+        )
+        self.preview_image.grid(row=1, column=0, sticky="nsew")
+
+        preview_actions = ttk.Frame(player)
+        preview_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.play_button = ttk.Button(preview_actions, text="播放", command=self.toggle_preview_playback)
+        self.play_button.pack(side="left")
+        ttk.Button(preview_actions, text="打开所在目录", command=self.open_selected_clip).pack(side="left", padx=6)
+        ttk.Button(preview_actions, text="删除片段", command=self.delete_selected_clip).pack(side="left")
+
+        ttk.Label(parent, text="导出片段").grid(row=4, column=0, sticky="w", pady=(12, 0))
         clips_frame = ttk.Frame(parent)
-        clips_frame.grid(row=3, column=0, sticky="nsew")
+        clips_frame.grid(row=5, column=0, sticky="nsew")
         clips_frame.columnconfigure(0, weight=1)
         clips_frame.rowconfigure(0, weight=1)
         self.clip_list = ttk.Treeview(
@@ -195,14 +243,11 @@ class DesktopApp:
             self.clip_list.heading(key, text=label)
             self.clip_list.column(key, width=width, stretch=(key == "path"), anchor="center" if key != "path" else "w")
         self.clip_list.grid(row=0, column=0, sticky="nsew")
-        self.clip_list.bind("<Double-1>", lambda _event: self.open_selected_clip())
+        self.clip_list.bind("<<TreeviewSelect>>", self.select_clip)
+        self.clip_list.bind("<Double-1>", lambda _event: self.toggle_preview_playback())
         clip_scrollbar = ttk.Scrollbar(clips_frame, orient="vertical", command=self.clip_list.yview)
         clip_scrollbar.grid(row=0, column=1, sticky="ns")
         self.clip_list.configure(yscrollcommand=clip_scrollbar.set)
-
-        actions = ttk.Frame(parent)
-        actions.grid(row=4, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(actions, text="打开选中片段所在目录", command=self.open_selected_clip).pack(side="left")
 
     def _number(self, parent: ttk.Frame, label: str, variable: StringVar | DoubleVar | IntVar, row: int, col: int) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", pady=(8, 0))
@@ -289,6 +334,14 @@ class DesktopApp:
         if not self.selected_video:
             messagebox.showwarning(APP_TITLE, "请先扫描并选择一个视频。")
             return
+        self.stop_preview()
+        self.clips = []
+        self.selected_clip = None
+        self.preview_frames = []
+        self.preview_badge.set("约 - 杀")
+        self.preview_detail.set("")
+        self.preview_status.set("等待导出片段")
+        self.preview_image.configure(image="")
         self.clip_list.delete(*self.clip_list.get_children())
         self.start_button.configure(state="disabled")
         self.progress.configure(value=0)
@@ -352,6 +405,12 @@ class DesktopApp:
             elif kind == "update_error":
                 manual, message = payload  # type: ignore[misc]
                 self._handle_update_error(bool(manual), str(message))
+            elif kind == "preview_ready":
+                token, clip_path, frames = payload  # type: ignore[misc]
+                self._handle_preview_ready(int(token), Path(str(clip_path)), frames)  # type: ignore[arg-type]
+            elif kind == "preview_error":
+                token, message = payload  # type: ignore[misc]
+                self._handle_preview_error(int(token), str(message))
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 if self.status.get() != "出错":
@@ -412,30 +471,205 @@ class DesktopApp:
         self.status.set(f"扫描完成: {len(self.videos)} 个视频")
 
     def _render_clips(self, clips) -> None:
+        self.clips = list(clips)
+        self.refresh_clip_list()
+        self.log_box.insert("end", f"完成，导出 {len(clips)} 个片段\n")
+        self.log_box.see("end")
+        if self.clips:
+            first = "0"
+            self.clip_list.selection_set(first)
+            self.clip_list.focus(first)
+            self.select_clip()
+
+    def refresh_clip_list(self) -> None:
         self.clip_list.delete(*self.clip_list.get_children())
-        for index, clip in enumerate(clips):
+        for index, clip in enumerate(self.clips):
             self.clip_list.insert(
                 "",
                 "end",
                 iid=str(index),
                 values=(
-                    clip.kills,
+                    f"约 {clip.kills} 杀",
                     f"{clip.start:.2f}s",
                     f"{clip.end:.2f}s",
                     f"{clip.duration:.2f}s",
                     clip.path,
                 ),
             )
-        self.log_box.insert("end", f"完成，导出 {len(clips)} 个片段\n")
-        self.log_box.see("end")
 
     def open_selected_clip(self) -> None:
+        clip = self.current_clip()
+        if clip is None:
+            return
+        open_path(Path(clip.path))
+
+    def select_clip(self, _event: object | None = None) -> None:
+        clip = self.current_clip()
+        self.stop_preview()
+        self.preview_frames = []
+        self.preview_index = 0
+        self.preview_image.configure(image="")
+        if clip is None:
+            self.selected_clip = None
+            self.preview_badge.set("约 - 杀")
+            self.preview_detail.set("")
+            self.preview_status.set("选择导出片段后可在这里播放")
+            return
+        self.selected_clip = clip
+        self.preview_badge.set(f"约 {clip.kills} 杀")
+        self.preview_detail.set(f"{clip.name}  ·  {clip.duration:.2f}s")
+        self.preview_status.set("正在准备预览")
+        self.preview_token += 1
+        token = self.preview_token
+        thread = threading.Thread(target=self._preview_worker, args=(token, clip), daemon=True)
+        thread.start()
+
+    def current_clip(self) -> ClipSegment | None:
         selection = self.clip_list.selection()
         if not selection:
+            return None
+        try:
+            index = int(selection[0])
+        except ValueError:
+            return None
+        if index < 0 or index >= len(self.clips):
+            return None
+        return self.clips[index]
+
+    def _preview_worker(self, token: int, clip: ClipSegment) -> None:
+        try:
+            frames = self.preview_frames_for(Path(clip.path))
+            self.events.put(("preview_ready", (token, clip.path, frames)))
+        except Exception as exc:
+            self.events.put(("preview_error", (token, str(exc))))
+
+    def preview_frames_for(self, clip_path: Path) -> list[Path]:
+        clip_path = clip_path.expanduser().resolve()
+        if not clip_path.exists():
+            raise FileNotFoundError(clip_path)
+        cache_dir = self.preview_cache_dir / self.preview_cache_key(clip_path)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        frames = sorted(cache_dir.glob("frame_*.jpg"))
+        if frames:
+            return frames
+
+        ffmpeg = resolve_tool("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg 不可用，无法生成预览")
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(clip_path),
+            "-vf",
+            f"fps={PREVIEW_FPS},scale={PREVIEW_WIDTH}:-2:flags=lanczos",
+            str(cache_dir / "frame_%05d.jpg"),
+        ]
+        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "生成预览失败")
+        frames = sorted(cache_dir.glob("frame_*.jpg"))
+        if not frames:
+            raise RuntimeError("没有生成可播放预览帧")
+        return frames
+
+    @staticmethod
+    def preview_cache_key(clip_path: Path) -> str:
+        stat = clip_path.stat()
+        source = f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}"
+        return hashlib.sha1(source.encode("utf-8")).hexdigest()
+
+    def _handle_preview_ready(self, token: int, clip_path: Path, frames: list[Path]) -> None:
+        if token != self.preview_token:
             return
-        values = self.clip_list.item(selection[0]).get("values", [])
-        if len(values) >= 5:
-            open_path(Path(values[4]))
+        if self.selected_clip is None or Path(self.selected_clip.path).expanduser().resolve() != clip_path:
+            return
+        self.preview_frames = list(frames)
+        self.preview_index = 0
+        self.preview_status.set("")
+        self.show_preview_frame(0)
+
+    def _handle_preview_error(self, token: int, message: str) -> None:
+        if token != self.preview_token:
+            return
+        self.preview_status.set(f"预览失败: {message}")
+        self.preview_image.configure(image="")
+
+    def show_preview_frame(self, index: int) -> None:
+        if not self.preview_frames:
+            return
+        index = max(0, min(index, len(self.preview_frames) - 1))
+        image = Image.open(self.preview_frames[index])
+        self.preview_photo = ImageTk.PhotoImage(image)
+        self.preview_image.configure(image=self.preview_photo, text="")
+
+    def toggle_preview_playback(self) -> None:
+        if not self.preview_frames:
+            if self.selected_clip:
+                self.preview_status.set("预览还在准备中")
+            return
+        if self.is_preview_playing:
+            self.stop_preview()
+            return
+        self.is_preview_playing = True
+        self.play_button.configure(text="暂停")
+        if self.preview_index >= len(self.preview_frames) - 1:
+            self.preview_index = 0
+        self.advance_preview()
+
+    def advance_preview(self) -> None:
+        if not self.is_preview_playing or not self.preview_frames:
+            return
+        self.show_preview_frame(self.preview_index)
+        self.preview_index += 1
+        if self.preview_index >= len(self.preview_frames):
+            self.stop_preview()
+            self.preview_index = len(self.preview_frames) - 1
+            return
+        self.preview_after_id = self.root.after(int(1000 / PREVIEW_FPS), self.advance_preview)
+
+    def stop_preview(self) -> None:
+        self.is_preview_playing = False
+        self.play_button.configure(text="播放")
+        if self.preview_after_id:
+            self.root.after_cancel(self.preview_after_id)
+            self.preview_after_id = None
+
+    def delete_selected_clip(self) -> None:
+        clip = self.current_clip()
+        if clip is None:
+            return
+        clip_path = Path(clip.path)
+        if not messagebox.askyesno(APP_TITLE, f"确定删除这个片段吗？\n\n{clip_path.name}"):
+            return
+        self.stop_preview()
+        try:
+            if clip_path.exists():
+                clip_path.unlink()
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"删除失败: {exc}")
+            return
+        self.log_box.insert("end", f"已删除片段: {clip_path.name}\n")
+        self.log_box.see("end")
+        self.clips = [
+            item for item in self.clips if Path(item.path).expanduser().resolve() != clip_path
+        ]
+        self.refresh_clip_list()
+        if self.clips:
+            first = "0"
+            self.clip_list.selection_set(first)
+            self.clip_list.focus(first)
+            self.select_clip()
+        else:
+            self.selected_clip = None
+            self.preview_frames = []
+            self.preview_image.configure(image="")
+            self.preview_badge.set("约 - 杀")
+            self.preview_detail.set("")
+            self.preview_status.set("没有导出片段")
 
     @staticmethod
     def _format_seconds(value: float) -> str:
