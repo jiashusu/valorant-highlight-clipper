@@ -23,6 +23,8 @@ UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 THUMBNAIL_WIDTH = 260
 THUMBNAIL_HEIGHT = 146
 CLIP_CARD_COLUMNS = 3
+PREVIEW_VIDEO_WIDTH = 960
+PREVIEW_VIDEO_CRF = 28
 
 
 def open_path(path: Path) -> None:
@@ -68,7 +70,10 @@ class DesktopApp:
         self.player_process: subprocess.Popen[str] | None = None
         self.selected_clip_index: int | None = None
         self.playing_clip_index: int | None = None
+        self.playing_mode: str | None = None
+        self.preview_play_token = 0
         self.thumbnail_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_thumbnails"
+        self.preview_video_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_preview_videos"
         self.thumbnail_generation = 0
         self.thumbnail_photos: dict[int, ImageTk.PhotoImage] = {}
         self.thumbnail_labels: dict[int, ttk.Label] = {}
@@ -387,6 +392,12 @@ class DesktopApp:
             elif kind == "thumbnail_error":
                 generation, index = payload  # type: ignore[misc]
                 self._handle_thumbnail_error(int(generation), int(index))
+            elif kind == "preview_video_ready":
+                token, index, video_path = payload  # type: ignore[misc]
+                self._handle_preview_video_ready(int(token), int(index), Path(str(video_path)))
+            elif kind == "preview_video_error":
+                token, message = payload  # type: ignore[misc]
+                self._handle_preview_video_error(int(token), str(message))
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 if self.status.get() != "出错":
@@ -513,8 +524,8 @@ class DesktopApp:
             width=34,
         )
         preview.grid(row=0, column=0, sticky="ew")
-        preview.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
-        preview.bind("<Double-1>", lambda _event, i=index: self.toggle_preview_playback(i))
+        preview.bind("<Button-1>", lambda _event, i=index: self.play_low_quality_preview(i))
+        preview.bind("<Double-1>", lambda _event, i=index: self.play_low_quality_preview(i))
         self.thumbnail_labels[index] = preview
 
         title = ttk.Label(
@@ -546,7 +557,7 @@ class DesktopApp:
         play_button = ttk.Button(
             actions,
             text="高清播放",
-            command=lambda i=index: self.toggle_preview_playback(i),
+            command=lambda i=index: self.play_high_quality(i),
         )
         play_button.grid(row=0, column=0, sticky="ew")
         ttk.Button(actions, text="打开目录", command=lambda i=index: self.open_selected_clip(i)).grid(
@@ -581,13 +592,13 @@ class DesktopApp:
             return None
         return self.clips[index]
 
-    def toggle_preview_playback(self, index: int | None = None) -> None:
+    def play_low_quality_preview(self, index: int | None = None) -> None:
         if index is None:
             index = self.selected_clip_index
         if index is None:
             return
         if self.player_process and self.player_process.poll() is None:
-            if self.playing_clip_index == index:
+            if self.playing_clip_index == index and self.playing_mode == "preview":
                 self.stop_preview()
                 return
             self.stop_preview()
@@ -595,14 +606,59 @@ class DesktopApp:
         if clip is None:
             return
         self.select_clip(index)
-        clip_path = Path(clip.path).expanduser().resolve()
-        if not clip_path.exists():
-            messagebox.showwarning(APP_TITLE, f"片段不存在：{clip_path}")
+        self.preview_play_token += 1
+        token = self.preview_play_token
+        self.status.set(f"生成低清预览: Highlight #{index + 1:03d}")
+        thread = threading.Thread(target=self._preview_video_worker, args=(token, index, clip), daemon=True)
+        thread.start()
+
+    def _preview_video_worker(self, token: int, index: int, clip: ClipSegment) -> None:
+        try:
+            preview_path = self.preview_video_for(clip)
+            self.events.put(("preview_video_ready", (token, index, preview_path)))
+        except Exception as exc:
+            self.events.put(("preview_video_error", (token, str(exc))))
+
+    def _handle_preview_video_ready(self, token: int, index: int, video_path: Path) -> None:
+        if token != self.preview_play_token:
+            return
+        self.start_player(index, video_path, "preview")
+
+    def _handle_preview_video_error(self, token: int, message: str) -> None:
+        if token != self.preview_play_token:
+            return
+        self.status.set("低清预览失败")
+        messagebox.showerror(APP_TITLE, f"低清预览生成失败: {message}")
+
+    def play_high_quality(self, index: int | None = None) -> None:
+        if index is None:
+            index = self.selected_clip_index
+        if index is None:
+            return
+        self.preview_play_token += 1
+        if self.player_process and self.player_process.poll() is None:
+            if self.playing_clip_index == index and self.playing_mode == "high":
+                self.stop_preview()
+                return
+            self.stop_preview()
+        clip = self.current_clip(index)
+        if clip is None:
+            return
+        self.select_clip(index)
+        self.start_player(index, Path(clip.path).expanduser().resolve(), "high")
+
+    def start_player(self, index: int, video_path: Path, mode: str) -> None:
+        clip = self.current_clip(index)
+        if clip is None:
+            return
+        if not video_path.exists():
+            messagebox.showwarning(APP_TITLE, f"视频不存在：{video_path}")
             return
         ffplay = resolve_tool("ffplay")
         if not ffplay:
             messagebox.showerror(APP_TITLE, "没有找到内建播放器 ffplay，请重新打包 App。")
             return
+        title = "低清预览" if mode == "preview" else "高清播放"
         command = [
             ffplay,
             "-hide_banner",
@@ -610,8 +666,8 @@ class DesktopApp:
             "error",
             "-autoexit",
             "-window_title",
-            f"{APP_TITLE} - {clip.name}",
-            str(clip_path),
+            f"{APP_TITLE} - {title} - Highlight #{index + 1:03d}",
+            str(video_path),
         ]
         try:
             self.player_process = subprocess.Popen(
@@ -625,7 +681,10 @@ class DesktopApp:
             messagebox.showerror(APP_TITLE, f"播放器启动失败: {exc}")
             return
         self.playing_clip_index = index
-        self.set_play_button_text(index, "停止播放")
+        self.playing_mode = mode
+        if mode == "high":
+            self.set_play_button_text(index, "停止播放")
+        self.status.set(f"{title}: Highlight #{index + 1:03d}")
         self.root.after(500, self.watch_player)
 
     def watch_player(self) -> None:
@@ -635,17 +694,22 @@ class DesktopApp:
             self.root.after(500, self.watch_player)
             return
         self.player_process = None
-        if self.playing_clip_index is not None:
+        if self.playing_clip_index is not None and self.playing_mode == "high":
             self.set_play_button_text(self.playing_clip_index, "高清播放")
+        if self.status.get().startswith(("低清预览", "高清播放")):
+            self.status.set("完成")
         self.playing_clip_index = None
+        self.playing_mode = None
 
     def stop_preview(self) -> None:
-        if self.playing_clip_index is not None:
+        self.preview_play_token += 1
+        if self.playing_clip_index is not None and self.playing_mode == "high":
             self.set_play_button_text(self.playing_clip_index, "高清播放")
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
         self.player_process = None
         self.playing_clip_index = None
+        self.playing_mode = None
 
     def set_play_button_text(self, index: int, text: str) -> None:
         button = self.play_buttons.get(index)
@@ -678,6 +742,69 @@ class DesktopApp:
         else:
             self.selected_clip = None
             self.selected_clip_index = None
+
+    def preview_video_for(self, clip: ClipSegment) -> Path:
+        clip_path = Path(clip.path).expanduser().resolve()
+        if not clip_path.exists():
+            raise FileNotFoundError(clip_path)
+        cache_dir = self.preview_video_cache_dir / self.preview_video_cache_key(clip)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = cache_dir / "preview.mp4"
+        if preview_path.exists() and preview_path.stat().st_size > 0:
+            return preview_path
+
+        ffmpeg = resolve_tool("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg 不可用，无法生成低清预览")
+        temporary_path = cache_dir / "preview.tmp.mp4"
+        if temporary_path.exists():
+            temporary_path.unlink()
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(clip_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-vf",
+            f"scale={PREVIEW_VIDEO_WIDTH}:-2:flags=bilinear",
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            str(PREVIEW_VIDEO_CRF),
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            "-movflags",
+            "+faststart",
+            str(temporary_path),
+        ]
+        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "生成低清预览失败")
+        temporary_path.replace(preview_path)
+        return preview_path
+
+    def preview_video_cache_key(self, clip: ClipSegment) -> str:
+        clip_path = Path(clip.path).expanduser().resolve()
+        stat = clip_path.stat()
+        source = (
+            f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}:"
+            f"preview_width={PREVIEW_VIDEO_WIDTH}:crf={PREVIEW_VIDEO_CRF}:fps=30"
+        )
+        return hashlib.sha1(source.encode("utf-8")).hexdigest()
 
     def _thumbnail_worker(self, generation: int, index: int, clip: ClipSegment, seek_seconds: float) -> None:
         try:
