@@ -2,6 +2,23 @@
 
 ## 2026-05-11
 
+### 更新记录：修复 macOS 剪辑时报 `numpy.core.multiarray` 缺失
+
+- 问题现象：
+  - macOS App 可以打开，也可以扫描视频。
+  - 点击开始剪辑后报错：`No module named 'numpy.core.multiarray'`。
+- 根因判断：
+  - 当前本地打包环境安装了 NumPy 2.x。
+  - 项目里的模型文件 `valorant.npy` 来自旧版 NumPy 序列化格式，运行时会引用 `numpy.core.multiarray`。
+  - PyInstaller 打包时也可能因为这是 pickle 间接引用而没有自动收进去。
+- 本次修改：
+  - 将 `requirements.txt` 中 NumPy 固定为 `numpy>=1.26.0,<2.0`。
+  - 在 `mac/ValorantHighlightClipper.spec` 里显式加入 hidden import：`numpy.core.multiarray`。
+  - 后续重新打包 macOS App，确保 App 内置兼容版本的 NumPy。
+- Windows 同步提示：
+  - Windows 端重建时同样建议使用 `numpy>=1.26.0,<2.0`。
+  - 如果用 PyInstaller，也建议加入 hidden import：`numpy.core.multiarray`。
+
 ### 项目目标
 
 为 VALORANT 录屏制作本地高光剪辑工具。核心目标是自动识别击杀信息，导出高光片段，并尽量减少队友击杀被误剪的问题。
