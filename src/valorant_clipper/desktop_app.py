@@ -14,27 +14,60 @@ from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
-from .core import ClipSegment, DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video, resolve_tool
+from .core import (
+    ClipSegment,
+    DEFAULT_OUTPUT_DIR,
+    DEFAULT_SOURCE_DIR,
+    discover_videos,
+    hidden_subprocess_kwargs,
+    process_video,
+    resolve_tool,
+)
 from .update_checker import UpdateResult, check_for_update
 
 
 APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
-THUMBNAIL_WIDTH = 260
-THUMBNAIL_HEIGHT = 146
+THUMBNAIL_WIDTH = 320
+THUMBNAIL_HEIGHT = 180
 CLIP_CARD_COLUMNS = 3
-CARD_PREVIEW_FPS = 20
+CARD_PREVIEW_FPS = 30
+UI_FONT = ("Helvetica", 12)
+UI_FONT_BOLD = ("Helvetica", 12, "bold")
+TITLE_FONT = ("Helvetica", 22, "bold")
+MONO_FONT = ("Menlo", 11)
+COLORS = {
+    "bg": "#07090f",
+    "panel": "#10141d",
+    "panel_alt": "#151b26",
+    "card": "#111827",
+    "field": "#0b1020",
+    "border": "#273244",
+    "text": "#e7ecf5",
+    "muted": "#94a3b8",
+    "accent": "#22d3ee",
+    "accent_hover": "#38bdf8",
+    "danger": "#ef4444",
+    "select": "#0e7490",
+    "progress": "#10b981",
+}
 
 
 def open_path(path: Path) -> None:
     path = path.expanduser().resolve()
-    if path.is_file():
-        path = path.parent
     if os.name == "nt":
-        os.startfile(str(path))  # type: ignore[attr-defined]
+        if path.is_file():
+            subprocess.Popen(["explorer.exe", f"/select,{path}"], **hidden_subprocess_kwargs())
+        else:
+            os.startfile(str(path))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
+        if path.is_file():
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["open", str(path)])
     else:
+        if path.is_file():
+            path = path.parent
         subprocess.Popen(["xdg-open", str(path)])
 
 
@@ -42,19 +75,20 @@ class DesktopApp:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.title(APP_TITLE)
-        self.root.geometry("1040x720")
-        self.root.minsize(940, 640)
+        self.root.geometry("1560x960")
+        self.root.minsize(1280, 820)
+        self.root.configure(bg=COLORS["bg"])
 
         self.source_path = StringVar(value=str(DEFAULT_SOURCE_DIR))
         self.output_dir = StringVar(value=str(DEFAULT_OUTPUT_DIR))
-        self.confidence = DoubleVar(value=0.8)
+        self.confidence = DoubleVar(value=0.93)
         self.framerate = IntVar(value=8)
         self.seconds_before = DoubleVar(value=4.0)
         self.seconds_after = DoubleVar(value=0.5)
         self.merge_gap = DoubleVar(value=3.0)
         self.max_seconds = StringVar(value="")
         self.strict_own_kills = BooleanVar(value=True)
-        self.min_event_seconds = DoubleVar(value=0.45)
+        self.min_event_seconds = DoubleVar(value=0.75)
         self.copy_streams = BooleanVar(value=False)
         self.recursive = BooleanVar(value=False)
         self.status = StringVar(value="准备就绪")
@@ -81,41 +115,112 @@ class DesktopApp:
         self.card_preview_frame_index = 0
         self.card_preview_after_id: str | None = None
 
+        self._setup_style()
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self._drain_events)
         self.root.after(1500, lambda: self.check_for_updates(manual=False))
 
+    def _setup_style(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        self.root.option_add("*Font", UI_FONT)
+        style.configure(".", background=COLORS["bg"], foreground=COLORS["text"], font=UI_FONT)
+        style.configure("TFrame", background=COLORS["bg"])
+        style.configure("Panel.TFrame", background=COLORS["panel"])
+        style.configure("Header.TFrame", background=COLORS["bg"])
+        style.configure("Actions.TFrame", background=COLORS["card"])
+        style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=UI_FONT)
+        style.configure("Muted.TLabel", background=COLORS["bg"], foreground=COLORS["muted"])
+        style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=TITLE_FONT)
+        style.configure("Card.TFrame", background=COLORS["card"], relief="flat")
+        style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"])
+        style.configure("CardMuted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
+        style.configure(
+            "TLabelframe",
+            background=COLORS["panel"],
+            foreground=COLORS["text"],
+            bordercolor=COLORS["border"],
+            relief="solid",
+        )
+        style.configure("TLabelframe.Label", background=COLORS["panel"], foreground=COLORS["text"], font=UI_FONT_BOLD)
+        style.configure(
+            "TEntry",
+            fieldbackground=COLORS["field"],
+            foreground=COLORS["text"],
+            insertcolor=COLORS["text"],
+            bordercolor=COLORS["border"],
+            lightcolor=COLORS["border"],
+            darkcolor=COLORS["border"],
+        )
+        style.configure(
+            "TButton",
+            background=COLORS["panel_alt"],
+            foreground=COLORS["text"],
+            bordercolor=COLORS["border"],
+            focusthickness=1,
+            focuscolor=COLORS["accent"],
+            padding=(12, 7),
+        )
+        style.map("TButton", background=[("active", "#1f2937"), ("pressed", "#0f172a")])
+        style.configure("Accent.TButton", background=COLORS["accent"], foreground="#041016")
+        style.map("Accent.TButton", background=[("active", COLORS["accent_hover"]), ("pressed", "#0891b2")])
+        style.configure("Danger.TButton", background="#3f1d25", foreground="#fecdd3")
+        style.map("Danger.TButton", background=[("active", COLORS["danger"]), ("pressed", "#991b1b")])
+        style.configure("TCheckbutton", background=COLORS["panel"], foreground=COLORS["text"])
+        style.map("TCheckbutton", background=[("active", COLORS["panel"])])
+        style.configure(
+            "Treeview",
+            background=COLORS["field"],
+            fieldbackground=COLORS["field"],
+            foreground=COLORS["text"],
+            bordercolor=COLORS["border"],
+            rowheight=28,
+        )
+        style.configure("Treeview.Heading", background=COLORS["panel_alt"], foreground=COLORS["text"], font=UI_FONT_BOLD)
+        style.map("Treeview", background=[("selected", COLORS["select"])], foreground=[("selected", COLORS["text"])])
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=COLORS["panel_alt"],
+            background=COLORS["progress"],
+            bordercolor=COLORS["border"],
+            lightcolor=COLORS["progress"],
+            darkcolor=COLORS["progress"],
+        )
+
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
 
-        header = ttk.Frame(self.root, padding=(14, 12, 14, 8))
+        header = ttk.Frame(self.root, padding=(18, 14, 18, 10), style="Header.TFrame")
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
-        ttk.Label(header, text=APP_TITLE, font=("", 18, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Label(header, textvariable=self.status).grid(row=0, column=1, sticky="e")
+        ttk.Label(header, text=APP_TITLE, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, textvariable=self.status, style="Muted.TLabel").grid(row=0, column=1, sticky="e")
         ttk.Button(header, text="检查更新", command=lambda: self.check_for_updates(manual=True)).grid(
             row=0, column=2, sticky="e", padx=(10, 0)
         )
 
         body = ttk.PanedWindow(self.root, orient="horizontal")
-        body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 10))
+        body.grid(row=1, column=0, sticky="nsew", padx=18, pady=(0, 12))
 
-        left = ttk.Frame(body, padding=10)
-        right = ttk.Frame(body, padding=10)
+        left = ttk.Frame(body, padding=12, style="Panel.TFrame")
+        right = ttk.Frame(body, padding=12, style="Panel.TFrame")
         body.add(left, weight=2)
         body.add(right, weight=3)
 
         self._build_left_panel(left)
         self._build_right_panel(right)
 
-        footer = ttk.Frame(self.root, padding=(14, 0, 14, 12))
+        footer = ttk.Frame(self.root, padding=(18, 0, 18, 16))
         footer.grid(row=2, column=0, sticky="ew")
         footer.columnconfigure(0, weight=1)
         self.progress = ttk.Progressbar(footer, mode="determinate", maximum=100)
         self.progress.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-        self.start_button = ttk.Button(footer, text="开始剪辑", command=self.start_job)
+        self.start_button = ttk.Button(footer, text="开始剪辑", command=self.start_job, style="Accent.TButton")
         self.start_button.grid(row=0, column=1)
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
@@ -155,7 +260,7 @@ class DesktopApp:
 
         ttk.Label(settings, text="最多分析秒数").grid(row=3, column=0, sticky="w", pady=(8, 0))
         ttk.Entry(settings, textvariable=self.max_seconds, width=10).grid(row=3, column=1, sticky="ew", pady=(8, 0))
-        ttk.Checkbutton(settings, text="严格过滤队友击杀", variable=self.strict_own_kills).grid(
+        ttk.Checkbutton(settings, text="严格过滤队友击杀（推荐）", variable=self.strict_own_kills).grid(
             row=4, column=0, columnspan=2, sticky="w", pady=(10, 0)
         )
         ttk.Checkbutton(settings, text="快速无损截取", variable=self.copy_streams).grid(
@@ -165,7 +270,7 @@ class DesktopApp:
         scan_bar = ttk.Frame(parent)
         scan_bar.grid(row=2, column=0, sticky="ew")
         ttk.Button(scan_bar, text="扫描视频", command=self.scan_videos).pack(side="left")
-        ttk.Button(scan_bar, text="清空日志", command=lambda: self.log_box.delete("1.0", "end")).pack(
+        ttk.Button(scan_bar, text="清空日志", command=self.clear_log).pack(
             side="left", padx=6
         )
 
@@ -212,7 +317,7 @@ class DesktopApp:
 
         import tkinter as tk
 
-        self.clips_canvas = tk.Canvas(clips_frame, highlightthickness=0)
+        self.clips_canvas = tk.Canvas(clips_frame, highlightthickness=0, bg=COLORS["panel"], bd=0)
         self.clips_canvas.grid(row=0, column=0, sticky="nsew")
         clip_scrollbar = ttk.Scrollbar(clips_frame, orient="vertical", command=self.clips_canvas.yview)
         clip_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -233,26 +338,75 @@ class DesktopApp:
             self.clips_container,
             text="剪辑完成后会在这里显示低清预览和操作按钮",
             anchor="center",
+            style="Muted.TLabel",
         )
         self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
+        self._bind_widget_mousewheel(self.empty_clips_label)
+        self._bind_highlights_mousewheel()
 
     def _number(self, parent: ttk.Frame, label: str, variable: StringVar | DoubleVar | IntVar, row: int, col: int) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", pady=(8, 0))
         ttk.Entry(parent, textvariable=variable, width=10).grid(row=row, column=col + 1, sticky="ew", pady=(8, 0))
 
+    def _bind_highlights_mousewheel(self) -> None:
+        self._bind_widget_mousewheel(self.clips_canvas)
+        self._bind_widget_mousewheel(self.clips_container)
+
+    def _bind_widget_mousewheel(self, widget) -> None:
+        widget.bind("<MouseWheel>", self._on_highlights_mousewheel, add="+")
+        widget.bind("<Button-4>", self._on_highlights_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_highlights_mousewheel, add="+")
+
+    def _on_highlights_mousewheel(self, event) -> str:
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            delta = -1 if event.delta > 0 else 1
+        self.clips_canvas.yview_scroll(delta, "units")
+        return "break"
+
     def _text(self, parent: ttk.Frame, row: int):
-        frame = ttk.Frame(parent)
+        frame = ttk.Frame(parent, style="Panel.TFrame")
         frame.grid(row=row, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
         import tkinter as tk
 
-        text = tk.Text(frame, height=8, wrap="word")
+        text = tk.Text(
+            frame,
+            height=8,
+            wrap="word",
+            bg=COLORS["field"],
+            fg=COLORS["text"],
+            insertbackground=COLORS["text"],
+            selectbackground=COLORS["select"],
+            selectforeground=COLORS["text"],
+            relief="flat",
+            borderwidth=1,
+            highlightthickness=1,
+            highlightbackground=COLORS["border"],
+            highlightcolor=COLORS["accent"],
+            font=MONO_FONT,
+            state="disabled",
+        )
         text.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
         text.configure(yscrollcommand=scrollbar.set)
         return text
+
+    def append_log(self, message: str) -> None:
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", message)
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def clear_log(self) -> None:
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
 
     def choose_source_folder(self) -> None:
         path = filedialog.askdirectory(title="选择素材文件夹")
@@ -319,6 +473,8 @@ class DesktopApp:
 
     def start_job(self) -> None:
         if not self.selected_video:
+            self._select_first_video_if_available()
+        if not self.selected_video:
             messagebox.showwarning(APP_TITLE, "请先扫描并选择一个视频。")
             return
         self.stop_preview()
@@ -371,16 +527,14 @@ class DesktopApp:
             if kind == "videos":
                 self._render_videos(payload)  # type: ignore[arg-type]
             elif kind == "log":
-                self.log_box.insert("end", f"{payload}\n")
-                self.log_box.see("end")
+                self.append_log(f"{payload}\n")
             elif kind == "progress":
                 self.progress.configure(value=int(float(payload) * 100))
             elif kind == "clips":
                 self._render_clips(payload)  # type: ignore[arg-type]
             elif kind == "error":
                 self.status.set("出错")
-                self.log_box.insert("end", f"{payload}\n")
-                self.log_box.see("end")
+                self.append_log(f"{payload}\n")
                 messagebox.showerror(APP_TITLE, str(payload))
             elif kind == "update":
                 manual, result = payload  # type: ignore[misc]
@@ -446,6 +600,7 @@ class DesktopApp:
     def _render_videos(self, videos) -> None:
         self.videos = [video.__dict__ for video in videos]
         self.video_list.delete(*self.video_list.get_children())
+        self.selected_video = None
         for index, video in enumerate(self.videos):
             self.video_list.insert(
                 "",
@@ -457,13 +612,24 @@ class DesktopApp:
                     video["path"],
                 ),
             )
+        self._select_first_video_if_available()
         self.status.set(f"扫描完成: {len(self.videos)} 个视频")
+
+    def _select_first_video_if_available(self) -> None:
+        children = self.video_list.get_children()
+        if not children:
+            self.selected_video = None
+            return
+        first = children[0]
+        self.video_list.selection_set(first)
+        self.video_list.focus(first)
+        self.video_list.see(first)
+        self._select_video(None)
 
     def _render_clips(self, clips) -> None:
         self.clips = list(clips)
         self.refresh_clip_cards()
-        self.log_box.insert("end", f"完成，导出 {len(clips)} 个片段\n")
-        self.log_box.see("end")
+        self.append_log(f"完成，导出 {len(clips)} 个片段\n")
         if self.clips:
             self.select_clip(0)
 
@@ -497,8 +663,10 @@ class DesktopApp:
                 self.clips_container,
                 text="没有导出片段",
                 anchor="center",
+                style="Muted.TLabel",
             )
             self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
+            self._bind_widget_mousewheel(self.empty_clips_label)
             return
 
         for index, clip in enumerate(self.clips):
@@ -514,30 +682,34 @@ class DesktopApp:
     def render_clip_card(self, index: int, clip: ClipSegment) -> None:
         row = index // CLIP_CARD_COLUMNS
         column = index % CLIP_CARD_COLUMNS
-        card = ttk.Frame(self.clips_container, padding=8, relief="ridge")
-        card.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
+        card = ttk.Frame(self.clips_container, padding=10, style="Card.TFrame")
+        card.grid(row=row, column=column, sticky="nsew", padx=8, pady=8)
         card.columnconfigure(0, weight=1)
+        self._bind_widget_mousewheel(card)
 
         preview = ttk.Label(
             card,
             text="生成低清预览中",
             anchor="center",
-            relief="sunken",
+            style="CardMuted.TLabel",
             width=34,
         )
         preview.grid(row=0, column=0, sticky="ew")
         preview.bind("<Button-1>", lambda _event, i=index: self.play_low_quality_preview(i))
         preview.bind("<Double-1>", lambda _event, i=index: self.play_low_quality_preview(i))
+        self._bind_widget_mousewheel(preview)
         self.thumbnail_labels[index] = preview
 
         title = ttk.Label(
             card,
             text=f"Highlight #{index + 1:03d}",
-            font=("", 11, "bold"),
+            font=("Helvetica", 13, "bold"),
             anchor="w",
+            style="Card.TLabel",
         )
         title.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         title.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
+        self._bind_widget_mousewheel(title)
 
         info = ttk.Label(
             card,
@@ -547,11 +719,13 @@ class DesktopApp:
             ),
             anchor="w",
             justify="left",
+            style="CardMuted.TLabel",
         )
         info.grid(row=2, column=0, sticky="ew", pady=(2, 0))
         info.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
+        self._bind_widget_mousewheel(info)
 
-        actions = ttk.Frame(card)
+        actions = ttk.Frame(card, style="Actions.TFrame")
         actions.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         actions.columnconfigure(0, weight=1)
         actions.columnconfigure(1, weight=1)
@@ -559,15 +733,17 @@ class DesktopApp:
         play_button = ttk.Button(
             actions,
             text="高清播放",
+            style="Accent.TButton",
             command=lambda i=index: self.play_high_quality(i),
         )
         play_button.grid(row=0, column=0, sticky="ew")
-        ttk.Button(actions, text="打开目录", command=lambda i=index: self.open_selected_clip(i)).grid(
+        ttk.Button(actions, text="定位此视频", command=lambda i=index: self.open_selected_clip(i)).grid(
             row=0, column=1, sticky="ew", padx=(6, 0)
         )
-        ttk.Button(actions, text="删除", command=lambda i=index: self.delete_selected_clip(i)).grid(
+        ttk.Button(actions, text="删除", style="Danger.TButton", command=lambda i=index: self.delete_selected_clip(i)).grid(
             row=0, column=2, sticky="ew", padx=(6, 0)
         )
+        self._bind_widget_mousewheel(actions)
         self.play_buttons[index] = play_button
 
     def open_selected_clip(self, index: int | None = None) -> None:
@@ -696,6 +872,7 @@ class DesktopApp:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 text=True,
+                **hidden_subprocess_kwargs(),
             )
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"播放器启动失败: {exc}")
@@ -752,8 +929,7 @@ class DesktopApp:
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"删除失败: {exc}")
             return
-        self.log_box.insert("end", f"已删除片段: {clip_path.name}\n")
-        self.log_box.see("end")
+        self.append_log(f"已删除片段: {clip_path.name}\n")
         self.clips = [
             item for item in self.clips if Path(item.path).expanduser().resolve() != clip_path
         ]
@@ -791,13 +967,19 @@ class DesktopApp:
             "-i",
             str(clip_path),
             "-vf",
-            f"fps={CARD_PREVIEW_FPS},scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"fps={CARD_PREVIEW_FPS},scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,"
             f"pad={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black",
             "-q:v",
-            "5",
+            "3",
             str(temporary_dir / "frame_%05d.jpg"),
         ]
-        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **hidden_subprocess_kwargs(),
+        )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "生成卡片预览失败")
         frames = sorted(temporary_dir.glob("frame_*.jpg"))
@@ -813,7 +995,7 @@ class DesktopApp:
         stat = clip_path.stat()
         source = (
             f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}:"
-            f"card_preview={THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}:fps={CARD_PREVIEW_FPS}:q=5"
+            f"card_preview={THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}:fps={CARD_PREVIEW_FPS}:q=3"
         )
         return hashlib.sha1(source.encode("utf-8")).hexdigest()
 
@@ -892,12 +1074,18 @@ class DesktopApp:
             "-frames:v",
             "1",
             "-vf",
-            f"scale={THUMBNAIL_WIDTH}:-2:flags=fast_bilinear",
+            f"scale={THUMBNAIL_WIDTH}:-2:flags=lanczos",
             "-q:v",
-            "8",
+            "3",
             str(thumbnail_path),
         ]
-        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            **hidden_subprocess_kwargs(),
+        )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "生成低清预览失败")
         return thumbnail_path

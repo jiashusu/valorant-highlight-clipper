@@ -23,9 +23,14 @@ NETWORK_PATH = ASSET_DIR / "valorant.npy"
 MASK_PATH = ASSET_DIR / "valorant-mask.png"
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".flv"}
-DEFAULT_SOURCE_DIR = Path(
-    os.getenv("VALORANT_CLIPS_DIR", str(Path.home() / "Movies" / "VALORANT_CLIPS"))
-)
+
+
+def default_source_dir() -> Path:
+    fallback = Path.home() / ("Videos" if os.name == "nt" else "Movies") / "VALORANT_CLIPS"
+    return Path(os.getenv("VALORANT_CLIPS_DIR", str(fallback)))
+
+
+DEFAULT_SOURCE_DIR = default_source_dir()
 DEFAULT_OUTPUT_DIR = RUNTIME_ROOT / "outputs" / "valorant_highlights"
 DEFAULT_EXCLUDES = {
     ".venv",
@@ -109,11 +114,24 @@ def resolve_tool(tool: str) -> str | None:
     return shutil.which(tool)
 
 
+def hidden_subprocess_kwargs() -> dict:
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if os.name == "nt" and creationflags:
+        return {"creationflags": creationflags}
+    return {}
+
+
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     resolved_command = list(command)
-    if resolved_command and resolved_command[0] in {"ffmpeg", "ffprobe"}:
+    if resolved_command and resolved_command[0] in {"ffmpeg", "ffprobe", "ffplay"}:
         resolved_command[0] = resolve_tool(resolved_command[0]) or resolved_command[0]
-    return subprocess.run(resolved_command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return subprocess.run(
+        resolved_command,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **hidden_subprocess_kwargs(),
+    )
 
 
 def require_ffmpeg() -> None:
@@ -364,17 +382,27 @@ def cut_segment(
                 "-c:v",
                 "libx264",
                 "-preset",
-                "veryfast",
+                "slow",
                 "-crf",
-                "20",
+                "14",
+                "-pix_fmt",
+                "yuv420p",
                 "-c:a",
-                "aac",
+                "copy",
                 "-movflags",
                 "+faststart",
             ]
         )
     command.append(str(output_path))
     result = run_command(command)
+    if result.returncode != 0 and not copy_streams:
+        fallback = list(command)
+        for index in range(len(fallback) - 1):
+            if fallback[index] == "-c:a" and fallback[index + 1] == "copy":
+                fallback[index + 1] = "aac"
+                fallback[index + 2:index + 2] = ["-b:a", "192k"]
+                result = run_command(fallback)
+                break
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"failed to cut {output_path.name}")
 
@@ -423,9 +451,9 @@ def detect_segment_details(
     require_ffmpeg()
     network = ValorantNetwork()
     mask = Image.open(MASK_PATH).convert("RGBA")
-    effective_confidence = max(confidence, 0.88) if strict_own_kills else confidence
+    effective_confidence = max(confidence, 0.94) if strict_own_kills else confidence
     effective_min_event_seconds = (
-        max(min_event_seconds, 0.45) if strict_own_kills else min_event_seconds
+        max(min_event_seconds, 0.75) if strict_own_kills else min_event_seconds
     )
 
     with tempfile.TemporaryDirectory(prefix="valorant_frames_") as temp:
