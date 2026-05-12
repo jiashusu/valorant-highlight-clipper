@@ -20,7 +20,7 @@ from .update_checker import UpdateResult, check_for_update
 
 APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
-PREVIEW_FPS = 12
+PREVIEW_FPS = 18
 PREVIEW_WIDTH = 560
 
 
@@ -66,6 +66,7 @@ class DesktopApp:
         self.last_update_prompt_sha: str | None = None
         self.preview_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_previews"
         self.preview_frames: list[Path] = []
+        self.preview_images: list[ImageTk.PhotoImage] = []
         self.preview_index = 0
         self.preview_after_id: str | None = None
         self.preview_token = 0
@@ -338,6 +339,7 @@ class DesktopApp:
         self.clips = []
         self.selected_clip = None
         self.preview_frames = []
+        self.preview_images = []
         self.preview_badge.set("约 - 杀")
         self.preview_detail.set("")
         self.preview_status.set("等待导出片段")
@@ -507,6 +509,7 @@ class DesktopApp:
         clip = self.current_clip()
         self.stop_preview()
         self.preview_frames = []
+        self.preview_images = []
         self.preview_index = 0
         self.preview_image.configure(image="")
         if clip is None:
@@ -579,7 +582,7 @@ class DesktopApp:
     @staticmethod
     def preview_cache_key(clip_path: Path) -> str:
         stat = clip_path.stat()
-        source = f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}"
+        source = f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}:fps={PREVIEW_FPS}:width={PREVIEW_WIDTH}"
         return hashlib.sha1(source.encode("utf-8")).hexdigest()
 
     def _handle_preview_ready(self, token: int, clip_path: Path, frames: list[Path]) -> None:
@@ -587,7 +590,9 @@ class DesktopApp:
             return
         if self.selected_clip is None or Path(self.selected_clip.path).expanduser().resolve() != clip_path:
             return
+        self.preview_status.set("正在载入预览")
         self.preview_frames = list(frames)
+        self.preview_images = self.load_preview_images(self.preview_frames)
         self.preview_index = 0
         self.preview_status.set("")
         self.show_preview_frame(0)
@@ -598,16 +603,22 @@ class DesktopApp:
         self.preview_status.set(f"预览失败: {message}")
         self.preview_image.configure(image="")
 
+    def load_preview_images(self, frames: list[Path]) -> list[ImageTk.PhotoImage]:
+        images: list[ImageTk.PhotoImage] = []
+        for frame in frames:
+            with Image.open(frame) as image:
+                images.append(ImageTk.PhotoImage(image.copy()))
+        return images
+
     def show_preview_frame(self, index: int) -> None:
-        if not self.preview_frames:
+        if not self.preview_images:
             return
-        index = max(0, min(index, len(self.preview_frames) - 1))
-        image = Image.open(self.preview_frames[index])
-        self.preview_photo = ImageTk.PhotoImage(image)
+        index = max(0, min(index, len(self.preview_images) - 1))
+        self.preview_photo = self.preview_images[index]
         self.preview_image.configure(image=self.preview_photo, text="")
 
     def toggle_preview_playback(self) -> None:
-        if not self.preview_frames:
+        if not self.preview_images:
             if self.selected_clip:
                 self.preview_status.set("预览还在准备中")
             return
@@ -616,18 +627,18 @@ class DesktopApp:
             return
         self.is_preview_playing = True
         self.play_button.configure(text="暂停")
-        if self.preview_index >= len(self.preview_frames) - 1:
+        if self.preview_index >= len(self.preview_images) - 1:
             self.preview_index = 0
         self.advance_preview()
 
     def advance_preview(self) -> None:
-        if not self.is_preview_playing or not self.preview_frames:
+        if not self.is_preview_playing or not self.preview_images:
             return
         self.show_preview_frame(self.preview_index)
         self.preview_index += 1
-        if self.preview_index >= len(self.preview_frames):
+        if self.preview_index >= len(self.preview_images):
             self.stop_preview()
-            self.preview_index = len(self.preview_frames) - 1
+            self.preview_index = len(self.preview_images) - 1
             return
         self.preview_after_id = self.root.after(int(1000 / PREVIEW_FPS), self.advance_preview)
 
@@ -666,6 +677,7 @@ class DesktopApp:
         else:
             self.selected_clip = None
             self.preview_frames = []
+            self.preview_images = []
             self.preview_image.configure(image="")
             self.preview_badge.set("约 - 杀")
             self.preview_detail.set("")
