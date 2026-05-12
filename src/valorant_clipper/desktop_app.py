@@ -23,10 +23,13 @@ from .core import (
     process_video,
     resolve_tool,
 )
+from .build_info import BUILD_SHA
 from .update_checker import UpdateResult, check_for_update
 
 
 APP_TITLE = "Valorant 高光剪辑"
+APP_VERSION = "macOS v1.3.2"
+UPDATE_BADGE = "已同步 Windows v1.3.2 · 384x216 预览 · Finder 精确定位"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 THUMBNAIL_WIDTH = 384
 THUMBNAIL_HEIGHT = 216
@@ -55,6 +58,13 @@ COLORS = {
     "select": "#0e7490",
     "progress": "#10b981",
 }
+
+
+def build_short_sha() -> str:
+    value = (BUILD_SHA or "").strip()
+    if not value or value == "unknown":
+        return "local"
+    return value[:7]
 
 
 def open_path(path: Path) -> None:
@@ -149,10 +159,15 @@ class DesktopApp:
         style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=UI_FONT)
         style.configure("Muted.TLabel", background=COLORS["bg"], foreground=COLORS["muted"])
         style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=TITLE_FONT)
+        style.configure("Version.TLabel", background=COLORS["bg"], foreground=COLORS["accent"], font=UI_FONT_BOLD)
+        style.configure("Badge.TLabel", background=COLORS["accent"], foreground="#041016", font=UI_FONT_BOLD)
         style.configure("Warning.TLabel", background=COLORS["warning_bg"], foreground=COLORS["warning"])
         style.configure("Card.TFrame", background=COLORS["card"], relief="flat")
         style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"])
         style.configure("CardMuted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
+        style.configure("EmptyCard.TFrame", background=COLORS["card"], relief="flat")
+        style.configure("EmptyTitle.TLabel", background=COLORS["card"], foreground=COLORS["text"], font=TITLE_FONT)
+        style.configure("EmptyText.TLabel", background=COLORS["card"], foreground=COLORS["muted"], font=UI_FONT)
         style.configure(
             "TLabelframe",
             background=COLORS["panel"],
@@ -224,9 +239,15 @@ class DesktopApp:
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
         ttk.Label(header, text=APP_TITLE, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, text=f"{APP_VERSION} · {build_short_sha()}", style="Version.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(14, 0)
+        )
         ttk.Label(header, textvariable=self.status, style="Muted.TLabel").grid(row=0, column=1, sticky="e")
         ttk.Button(header, text="检查更新", command=lambda: self.check_for_updates(manual=True)).grid(
             row=0, column=2, sticky="e", padx=(10, 0)
+        )
+        ttk.Label(header, text=UPDATE_BADGE, anchor="center", padding=(10, 5), style="Badge.TLabel").grid(
+            row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0)
         )
 
         body = ttk.PanedWindow(self.root, orient="horizontal")
@@ -352,9 +373,10 @@ class DesktopApp:
 
         self.clips_canvas = tk.Canvas(clips_frame, highlightthickness=0, bg=COLORS["panel"], bd=0)
         self.clips_canvas.grid(row=0, column=0, sticky="nsew")
-        clip_scrollbar = ttk.Scrollbar(clips_frame, orient="vertical", command=self.clips_canvas.yview)
-        clip_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.clips_canvas.configure(yscrollcommand=clip_scrollbar.set)
+        self.clip_scrollbar = ttk.Scrollbar(clips_frame, orient="vertical", command=self.clips_canvas.yview)
+        self.clip_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.clip_scrollbar.grid_remove()
+        self.clips_canvas.configure(yscrollcommand=self.clip_scrollbar.set)
 
         self.clips_container = ttk.Frame(self.clips_canvas)
         self.clips_window = self.clips_canvas.create_window((0, 0), window=self.clips_container, anchor="nw")
@@ -367,14 +389,7 @@ class DesktopApp:
             lambda event: self.clips_canvas.itemconfigure(self.clips_window, width=event.width),
         )
 
-        self.empty_clips_label = ttk.Label(
-            self.clips_container,
-            text="剪辑完成后会在这里显示低清预览和操作按钮",
-            anchor="center",
-            style="Muted.TLabel",
-        )
-        self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
-        self._bind_widget_mousewheel(self.empty_clips_label)
+        self.show_empty_clips("还没有高光片段", "扫描并开始剪辑后，这里会显示低清预览、约几杀、高清播放、定位视频和删除按钮。")
         self._bind_highlights_mousewheel()
 
     def _number(self, parent: ttk.Frame, label: str, variable: StringVar | DoubleVar | IntVar, row: int, col: int) -> None:
@@ -399,6 +414,20 @@ class DesktopApp:
             delta = -1 if event.delta > 0 else 1
         self.clips_canvas.yview_scroll(delta, "units")
         return "break"
+
+    def show_empty_clips(self, title: str, detail: str) -> None:
+        if hasattr(self, "clip_scrollbar"):
+            self.clip_scrollbar.grid_remove()
+        empty = ttk.Frame(self.clips_container, padding=22, style="EmptyCard.TFrame")
+        empty.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        empty.columnconfigure(0, weight=1)
+        self.empty_clips_label = ttk.Label(empty, text=title, anchor="w", style="EmptyTitle.TLabel")
+        self.empty_clips_label.grid(row=0, column=0, sticky="ew")
+        detail_label = ttk.Label(empty, text=detail, anchor="w", justify="left", wraplength=760, style="EmptyText.TLabel")
+        detail_label.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self._bind_widget_mousewheel(empty)
+        self._bind_widget_mousewheel(self.empty_clips_label)
+        self._bind_widget_mousewheel(detail_label)
 
     def _text(self, parent: ttk.Frame, row: int):
         frame = ttk.Frame(parent, style="Panel.TFrame")
@@ -673,14 +702,7 @@ class DesktopApp:
         self.play_buttons = {}
         for child in self.clips_container.winfo_children():
             child.destroy()
-        self.empty_clips_label = ttk.Label(
-            self.clips_container,
-            text="剪辑完成后会在这里显示低清预览和操作按钮",
-            anchor="center",
-            style="Muted.TLabel",
-        )
-        self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
-        self._bind_widget_mousewheel(self.empty_clips_label)
+        self.show_empty_clips("正在准备新的剪辑", "高光片段导出后会自动出现在这里。")
 
     def refresh_clip_cards(self) -> None:
         self.thumbnail_generation += 1
@@ -694,15 +716,10 @@ class DesktopApp:
             self.clips_container.columnconfigure(column, weight=1, uniform="clip_cards")
         self.selected_clip_index = None
         if not self.clips:
-            self.empty_clips_label = ttk.Label(
-                self.clips_container,
-                text="没有导出片段",
-                anchor="center",
-                style="Muted.TLabel",
-            )
-            self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
-            self._bind_widget_mousewheel(self.empty_clips_label)
+            self.show_empty_clips("没有导出片段", "这次没有识别到满足条件的高光。可以降低置信度、缩短最短事件秒数，或关闭严格过滤后再试。")
             return
+        if hasattr(self, "clip_scrollbar"):
+            self.clip_scrollbar.grid()
 
         for index, clip in enumerate(self.clips):
             self.render_clip_card(index, clip)
