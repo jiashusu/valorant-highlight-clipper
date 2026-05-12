@@ -9,7 +9,9 @@
 - 设置识别参数
 - 后台剪辑并显示进度日志
 - 显示每个导出片段的估算击杀数
-- 打开输出目录或选中片段所在目录
+- 3 列 Highlights 卡片墙，支持低清卡片内预览、高清播放、定位视频和删除片段
+- 打开输出目录或在 Finder 中精确选中导出的片段
+- 自动检查 GitHub 上的 macOS 新版本
 
 ## 打包
 
@@ -23,4 +25,4 @@
 dist/ValorantHighlightClipper.app
 ```
 
-macOS 打包时会把当前系统可用的 `ffmpeg` 和 `ffprobe` 放进 `.app`。
+macOS 打包时会把当前系统可用的 `ffmpeg`、`ffprobe` 和 `ffplay` 放进 `.app`。

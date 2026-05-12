@@ -28,8 +28,8 @@ from .update_checker import UpdateResult, check_for_update
 
 APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
-THUMBNAIL_WIDTH = 320
-THUMBNAIL_HEIGHT = 180
+THUMBNAIL_WIDTH = 384
+THUMBNAIL_HEIGHT = 216
 CLIP_CARD_COLUMNS = 3
 CARD_PREVIEW_FPS = 30
 UI_FONT = ("Helvetica", 12)
@@ -41,6 +41,7 @@ COLORS = {
     "panel": "#10141d",
     "panel_alt": "#151b26",
     "card": "#111827",
+    "card_hover": "#152033",
     "field": "#0b1020",
     "border": "#273244",
     "text": "#e7ecf5",
@@ -48,18 +49,23 @@ COLORS = {
     "accent": "#22d3ee",
     "accent_hover": "#38bdf8",
     "danger": "#ef4444",
+    "danger_soft": "#3f1d25",
+    "warning": "#facc15",
+    "warning_bg": "#1f1a0b",
     "select": "#0e7490",
     "progress": "#10b981",
 }
 
 
 def open_path(path: Path) -> None:
-    path = path.expanduser().resolve()
+    path = path.expanduser().resolve(strict=False)
     if os.name == "nt":
         if path.is_file():
-            subprocess.Popen(["explorer.exe", f"/select,{path}"], **hidden_subprocess_kwargs())
-        else:
+            subprocess.Popen(["explorer.exe", f'/select,"{path}"'], **hidden_subprocess_kwargs())
+        elif path.exists():
             os.startfile(str(path))  # type: ignore[attr-defined]
+        else:
+            raise FileNotFoundError(path)
     elif sys.platform == "darwin":
         if path.is_file():
             subprocess.Popen(["open", "-R", str(path)])
@@ -71,12 +77,19 @@ def open_path(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
+def reveal_exported_clip(path: Path) -> None:
+    path = path.expanduser().resolve(strict=False)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(path)
+    open_path(path)
+
+
 class DesktopApp:
     def __init__(self) -> None:
         self.root = Tk()
         self.root.title(APP_TITLE)
-        self.root.geometry("1560x960")
-        self.root.minsize(1280, 820)
+        self.root.geometry("1720x980")
+        self.root.minsize(1360, 840)
         self.root.configure(bg=COLORS["bg"])
 
         self.source_path = StringVar(value=str(DEFAULT_SOURCE_DIR))
@@ -136,6 +149,7 @@ class DesktopApp:
         style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=UI_FONT)
         style.configure("Muted.TLabel", background=COLORS["bg"], foreground=COLORS["muted"])
         style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=TITLE_FONT)
+        style.configure("Warning.TLabel", background=COLORS["warning_bg"], foreground=COLORS["warning"])
         style.configure("Card.TFrame", background=COLORS["card"], relief="flat")
         style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"])
         style.configure("CardMuted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
@@ -144,7 +158,8 @@ class DesktopApp:
             background=COLORS["panel"],
             foreground=COLORS["text"],
             bordercolor=COLORS["border"],
-            relief="solid",
+            relief="flat",
+            borderwidth=0,
         )
         style.configure("TLabelframe.Label", background=COLORS["panel"], foreground=COLORS["text"], font=UI_FONT_BOLD)
         style.configure(
@@ -168,7 +183,7 @@ class DesktopApp:
         style.map("TButton", background=[("active", "#1f2937"), ("pressed", "#0f172a")])
         style.configure("Accent.TButton", background=COLORS["accent"], foreground="#041016")
         style.map("Accent.TButton", background=[("active", COLORS["accent_hover"]), ("pressed", "#0891b2")])
-        style.configure("Danger.TButton", background="#3f1d25", foreground="#fecdd3")
+        style.configure("Danger.TButton", background=COLORS["danger_soft"], foreground="#fecdd3")
         style.map("Danger.TButton", background=[("active", COLORS["danger"]), ("pressed", "#991b1b")])
         style.configure("TCheckbutton", background=COLORS["panel"], foreground=COLORS["text"])
         style.map("TCheckbutton", background=[("active", COLORS["panel"])])
@@ -190,6 +205,16 @@ class DesktopApp:
             lightcolor=COLORS["progress"],
             darkcolor=COLORS["progress"],
         )
+        for orient in ("Vertical", "Horizontal"):
+            style.configure(
+                f"{orient}.TScrollbar",
+                background=COLORS["panel_alt"],
+                troughcolor=COLORS["field"],
+                bordercolor=COLORS["border"],
+                arrowcolor=COLORS["muted"],
+                lightcolor=COLORS["panel_alt"],
+                darkcolor=COLORS["panel_alt"],
+            )
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -210,7 +235,7 @@ class DesktopApp:
         left = ttk.Frame(body, padding=12, style="Panel.TFrame")
         right = ttk.Frame(body, padding=12, style="Panel.TFrame")
         body.add(left, weight=2)
-        body.add(right, weight=3)
+        body.add(right, weight=6)
 
         self._build_left_panel(left)
         self._build_right_panel(right)
@@ -299,7 +324,7 @@ class DesktopApp:
     def _build_right_panel(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
-        parent.rowconfigure(3, weight=3)
+        parent.rowconfigure(4, weight=3)
 
         ttk.Label(parent, text="处理日志").grid(row=0, column=0, sticky="w")
         self.log_box = self._text(parent, row=1)
@@ -310,8 +335,16 @@ class DesktopApp:
         ttk.Label(results_header, text="Highlights").grid(row=0, column=0, sticky="w")
         ttk.Label(results_header, text="低清预览 / 高清播放").grid(row=0, column=1, sticky="e")
 
+        ttk.Label(
+            parent,
+            text="提示：当前版本仍可能输出队友击杀片段，可先手动删除；后续会继续更新识别逻辑。",
+            anchor="w",
+            padding=(10, 7),
+            style="Warning.TLabel",
+        ).grid(row=3, column=0, sticky="ew", pady=(6, 0))
+
         clips_frame = ttk.Frame(parent)
-        clips_frame.grid(row=3, column=0, sticky="nsew")
+        clips_frame.grid(row=4, column=0, sticky="nsew", pady=(8, 0))
         clips_frame.columnconfigure(0, weight=1)
         clips_frame.rowconfigure(0, weight=1)
 
@@ -644,8 +677,10 @@ class DesktopApp:
             self.clips_container,
             text="剪辑完成后会在这里显示低清预览和操作按钮",
             anchor="center",
+            style="Muted.TLabel",
         )
         self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
+        self._bind_widget_mousewheel(self.empty_clips_label)
 
     def refresh_clip_cards(self) -> None:
         self.thumbnail_generation += 1
@@ -750,7 +785,12 @@ class DesktopApp:
         clip = self.current_clip(index)
         if clip is None:
             return
-        open_path(Path(clip.path))
+        clip_path = Path(clip.path).expanduser().resolve(strict=False)
+        try:
+            reveal_exported_clip(clip_path)
+        except Exception as exc:
+            self.append_log(f"找不到导出视频：\n{clip_path}\n{exc}\n")
+            messagebox.showerror(APP_TITLE, f"找不到导出视频：\n{clip_path}")
 
     def select_clip(self, index: int | None = None) -> None:
         clip = self.current_clip(index)
