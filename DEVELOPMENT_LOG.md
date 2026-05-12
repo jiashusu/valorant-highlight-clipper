@@ -2,6 +2,20 @@
 
 ## 2026-05-12
 
+### 修复记录：本地 release App 没显示最新版界面
+
+- 问题现象：
+  - GitHub 源码已经包含 `macOS v1.3.2`、同步标识和新的 Highlights 空状态。
+  - 用户实际打开的 release App 仍然显示旧界面，没有版本号和同步条。
+- 根因：
+  - 本地打包目录 `无畏契约自动剪辑/src/valorant_clipper/desktop_app.py` 没有被最新源码覆盖。
+  - `build_info.py` 已经是新版本号，但桌面 UI 源码仍是旧文件，所以打包出的 `.app` 看不到新界面。
+- 本次处理：
+  - 强制重新同步 mac 源码到本地打包目录。
+  - 重新写入 `BUILD_SHA = "880a187"`。
+  - 在打包目录直接运行自检，确认能读到 `macOS v1.3.2`、`880a187` 和同步标识。
+  - 重新执行 PyInstaller 打包并准备覆盖 release `.app` 和 zip。
+
 ### 更新记录：让 macOS 更新变得一眼可见
 
 - 需求来源：
