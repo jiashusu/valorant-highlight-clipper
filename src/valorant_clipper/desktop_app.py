@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import os
 import queue
+import hashlib
 import subprocess
 import sys
 import threading
+import tempfile
 import webbrowser
 from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
+
+from PIL import Image, ImageTk
 
 from .core import ClipSegment, DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video, resolve_tool
 from .update_checker import UpdateResult, check_for_update
@@ -16,6 +20,8 @@ from .update_checker import UpdateResult, check_for_update
 
 APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
+THUMBNAIL_WIDTH = 260
+THUMBNAIL_HEIGHT = 146
 
 
 def open_path(path: Path) -> None:
@@ -59,9 +65,13 @@ class DesktopApp:
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.last_update_prompt_sha: str | None = None
         self.player_process: subprocess.Popen[str] | None = None
-        self.preview_status = StringVar(value="选择导出片段后可在这里播放")
-        self.preview_badge = StringVar(value="约 - 杀")
-        self.preview_detail = StringVar(value="")
+        self.selected_clip_index: int | None = None
+        self.playing_clip_index: int | None = None
+        self.thumbnail_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_thumbnails"
+        self.thumbnail_generation = 0
+        self.thumbnail_photos: dict[int, ImageTk.PhotoImage] = {}
+        self.thumbnail_labels: dict[int, ttk.Label] = {}
+        self.play_buttons: dict[int, ttk.Button] = {}
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -177,66 +187,41 @@ class DesktopApp:
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
         parent.rowconfigure(3, weight=3)
-        parent.rowconfigure(5, weight=2)
 
         ttk.Label(parent, text="处理日志").grid(row=0, column=0, sticky="w")
         self.log_box = self._text(parent, row=1)
 
-        ttk.Label(parent, text="片段预览").grid(row=2, column=0, sticky="w", pady=(12, 0))
-        player = ttk.Frame(parent)
-        player.grid(row=3, column=0, sticky="nsew")
-        player.columnconfigure(0, weight=1)
-        player.rowconfigure(1, weight=1)
-
-        preview_header = ttk.Frame(player)
-        preview_header.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        preview_header.columnconfigure(1, weight=1)
-        self.preview_badge_label = ttk.Label(preview_header, textvariable=self.preview_badge)
-        self.preview_badge_label.grid(row=0, column=0, sticky="w")
-        ttk.Label(preview_header, textvariable=self.preview_detail).grid(row=0, column=1, sticky="w", padx=(12, 0))
-
-        self.preview_image = ttk.Label(
-            player,
-            textvariable=self.preview_status,
-            anchor="center",
-            relief="sunken",
-            padding=8,
-        )
-        self.preview_image.grid(row=1, column=0, sticky="nsew")
-
-        preview_actions = ttk.Frame(player)
-        preview_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        self.play_button = ttk.Button(preview_actions, text="播放", command=self.toggle_preview_playback)
-        self.play_button.pack(side="left")
-        ttk.Button(preview_actions, text="打开所在目录", command=self.open_selected_clip).pack(side="left", padx=6)
-        ttk.Button(preview_actions, text="删除片段", command=self.delete_selected_clip).pack(side="left")
-
-        ttk.Label(parent, text="导出片段").grid(row=4, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(parent, text="导出片段").grid(row=2, column=0, sticky="w", pady=(12, 0))
         clips_frame = ttk.Frame(parent)
-        clips_frame.grid(row=5, column=0, sticky="nsew")
+        clips_frame.grid(row=3, column=0, sticky="nsew")
         clips_frame.columnconfigure(0, weight=1)
         clips_frame.rowconfigure(0, weight=1)
-        self.clip_list = ttk.Treeview(
-            clips_frame,
-            columns=("kills", "start", "end", "duration", "path"),
-            show="headings",
-            selectmode="browse",
-        )
-        for key, label, width in [
-            ("kills", "击杀", 60),
-            ("start", "开始", 70),
-            ("end", "结束", 70),
-            ("duration", "长度", 70),
-            ("path", "文件", 360),
-        ]:
-            self.clip_list.heading(key, text=label)
-            self.clip_list.column(key, width=width, stretch=(key == "path"), anchor="center" if key != "path" else "w")
-        self.clip_list.grid(row=0, column=0, sticky="nsew")
-        self.clip_list.bind("<<TreeviewSelect>>", self.select_clip)
-        self.clip_list.bind("<Double-1>", lambda _event: self.toggle_preview_playback())
-        clip_scrollbar = ttk.Scrollbar(clips_frame, orient="vertical", command=self.clip_list.yview)
+
+        import tkinter as tk
+
+        self.clips_canvas = tk.Canvas(clips_frame, highlightthickness=0)
+        self.clips_canvas.grid(row=0, column=0, sticky="nsew")
+        clip_scrollbar = ttk.Scrollbar(clips_frame, orient="vertical", command=self.clips_canvas.yview)
         clip_scrollbar.grid(row=0, column=1, sticky="ns")
-        self.clip_list.configure(yscrollcommand=clip_scrollbar.set)
+        self.clips_canvas.configure(yscrollcommand=clip_scrollbar.set)
+
+        self.clips_container = ttk.Frame(self.clips_canvas)
+        self.clips_window = self.clips_canvas.create_window((0, 0), window=self.clips_container, anchor="nw")
+        self.clips_container.bind(
+            "<Configure>",
+            lambda _event: self.clips_canvas.configure(scrollregion=self.clips_canvas.bbox("all")),
+        )
+        self.clips_canvas.bind(
+            "<Configure>",
+            lambda event: self.clips_canvas.itemconfigure(self.clips_window, width=event.width),
+        )
+
+        self.empty_clips_label = ttk.Label(
+            self.clips_container,
+            text="剪辑完成后会在这里显示低清预览和操作按钮",
+            anchor="center",
+        )
+        self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
 
     def _number(self, parent: ttk.Frame, label: str, variable: StringVar | DoubleVar | IntVar, row: int, col: int) -> None:
         ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", pady=(8, 0))
@@ -326,10 +311,8 @@ class DesktopApp:
         self.stop_preview()
         self.clips = []
         self.selected_clip = None
-        self.preview_badge.set("约 - 杀")
-        self.preview_detail.set("")
-        self.preview_status.set("等待导出片段")
-        self.clip_list.delete(*self.clip_list.get_children())
+        self.selected_clip_index = None
+        self.clear_clip_cards()
         self.start_button.configure(state="disabled")
         self.progress.configure(value=0)
         self.status.set("剪辑中")
@@ -392,6 +375,12 @@ class DesktopApp:
             elif kind == "update_error":
                 manual, message = payload  # type: ignore[misc]
                 self._handle_update_error(bool(manual), str(message))
+            elif kind == "thumbnail_ready":
+                generation, index, image_path = payload  # type: ignore[misc]
+                self._handle_thumbnail_ready(int(generation), int(index), Path(str(image_path)))
+            elif kind == "thumbnail_error":
+                generation, index = payload  # type: ignore[misc]
+                self._handle_thumbnail_error(int(generation), int(index))
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 if self.status.get() != "出错":
@@ -453,70 +442,139 @@ class DesktopApp:
 
     def _render_clips(self, clips) -> None:
         self.clips = list(clips)
-        self.refresh_clip_list()
+        self.refresh_clip_cards()
         self.log_box.insert("end", f"完成，导出 {len(clips)} 个片段\n")
         self.log_box.see("end")
         if self.clips:
-            first = "0"
-            self.clip_list.selection_set(first)
-            self.clip_list.focus(first)
-            self.select_clip()
+            self.select_clip(0)
 
-    def refresh_clip_list(self) -> None:
-        self.clip_list.delete(*self.clip_list.get_children())
-        for index, clip in enumerate(self.clips):
-            self.clip_list.insert(
-                "",
-                "end",
-                iid=str(index),
-                values=(
-                    f"约 {clip.kills} 杀",
-                    f"{clip.start:.2f}s",
-                    f"{clip.end:.2f}s",
-                    f"{clip.duration:.2f}s",
-                    clip.path,
-                ),
+    def clear_clip_cards(self) -> None:
+        self.thumbnail_generation += 1
+        self.thumbnail_photos = {}
+        self.thumbnail_labels = {}
+        self.play_buttons = {}
+        for child in self.clips_container.winfo_children():
+            child.destroy()
+        self.empty_clips_label = ttk.Label(
+            self.clips_container,
+            text="剪辑完成后会在这里显示低清预览和操作按钮",
+            anchor="center",
+        )
+        self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
+
+    def refresh_clip_cards(self) -> None:
+        self.thumbnail_generation += 1
+        generation = self.thumbnail_generation
+        self.thumbnail_photos = {}
+        self.thumbnail_labels = {}
+        self.play_buttons = {}
+        for child in self.clips_container.winfo_children():
+            child.destroy()
+        self.selected_clip_index = None
+        if not self.clips:
+            self.empty_clips_label = ttk.Label(
+                self.clips_container,
+                text="没有导出片段",
+                anchor="center",
             )
+            self.empty_clips_label.grid(row=0, column=0, sticky="ew", pady=24)
+            return
 
-    def open_selected_clip(self) -> None:
-        clip = self.current_clip()
+        for index, clip in enumerate(self.clips):
+            self.render_clip_card(index, clip)
+            seek_seconds = self.thumbnail_seek_seconds(clip)
+            thread = threading.Thread(
+                target=self._thumbnail_worker,
+                args=(generation, index, clip, seek_seconds),
+                daemon=True,
+            )
+            thread.start()
+
+    def render_clip_card(self, index: int, clip: ClipSegment) -> None:
+        card = ttk.Frame(self.clips_container, padding=8, relief="ridge")
+        card.grid(row=index, column=0, sticky="ew", pady=(0, 8))
+        card.columnconfigure(0, weight=1)
+        card.columnconfigure(1, weight=0)
+        self.clips_container.columnconfigure(0, weight=1)
+
+        preview = ttk.Label(
+            card,
+            text="生成低清预览中",
+            anchor="center",
+            relief="sunken",
+            width=36,
+        )
+        preview.grid(row=0, column=0, sticky="ew")
+        preview.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
+        preview.bind("<Double-1>", lambda _event, i=index: self.toggle_preview_playback(i))
+        self.thumbnail_labels[index] = preview
+
+        info = ttk.Label(
+            card,
+            text=(
+                f"约 {clip.kills} 杀\n"
+                f"开始 {clip.start:.2f}s   结束 {clip.end:.2f}s   长度 {clip.duration:.2f}s"
+            ),
+            anchor="w",
+            justify="left",
+        )
+        info.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        info.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
+
+        actions = ttk.Frame(card)
+        actions.grid(row=0, column=1, rowspan=2, sticky="n", padx=(10, 0))
+        play_button = ttk.Button(
+            actions,
+            text="高清播放",
+            command=lambda i=index: self.toggle_preview_playback(i),
+        )
+        play_button.grid(row=0, column=0, sticky="ew")
+        ttk.Button(actions, text="打开目录", command=lambda i=index: self.open_selected_clip(i)).grid(
+            row=1, column=0, sticky="ew", pady=(6, 0)
+        )
+        ttk.Button(actions, text="删除", command=lambda i=index: self.delete_selected_clip(i)).grid(
+            row=2, column=0, sticky="ew", pady=(6, 0)
+        )
+        self.play_buttons[index] = play_button
+
+    def open_selected_clip(self, index: int | None = None) -> None:
+        clip = self.current_clip(index)
         if clip is None:
             return
         open_path(Path(clip.path))
 
-    def select_clip(self, _event: object | None = None) -> None:
-        clip = self.current_clip()
-        self.stop_preview()
+    def select_clip(self, index: int | None = None) -> None:
+        clip = self.current_clip(index)
         if clip is None:
             self.selected_clip = None
-            self.preview_badge.set("约 - 杀")
-            self.preview_detail.set("")
-            self.preview_status.set("选择导出片段后可在这里播放")
+            self.selected_clip_index = None
             return
         self.selected_clip = clip
-        self.preview_badge.set(f"约 {clip.kills} 杀")
-        self.preview_detail.set(f"{clip.name}  ·  {clip.duration:.2f}s")
-        self.preview_status.set("已选择片段，点击播放会打开内建播放器")
+        self.selected_clip_index = index
 
-    def current_clip(self) -> ClipSegment | None:
-        selection = self.clip_list.selection()
-        if not selection:
-            return None
-        try:
-            index = int(selection[0])
-        except ValueError:
+    def current_clip(self, index: int | None = None) -> ClipSegment | None:
+        if index is None:
+            index = self.selected_clip_index
+        if index is None:
             return None
         if index < 0 or index >= len(self.clips):
             return None
         return self.clips[index]
 
-    def toggle_preview_playback(self) -> None:
-        if self.player_process and self.player_process.poll() is None:
-            self.stop_preview()
+    def toggle_preview_playback(self, index: int | None = None) -> None:
+        if index is None:
+            index = self.selected_clip_index
+        if index is None:
             return
-        clip = self.current_clip()
+        if self.player_process and self.player_process.poll() is None:
+            if self.playing_clip_index == index:
+                self.stop_preview()
+                return
+            self.stop_preview()
+        clip = self.current_clip(index)
         if clip is None:
             return
+        self.select_clip(index)
         clip_path = Path(clip.path).expanduser().resolve()
         if not clip_path.exists():
             messagebox.showwarning(APP_TITLE, f"片段不存在：{clip_path}")
@@ -546,8 +604,8 @@ class DesktopApp:
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"播放器启动失败: {exc}")
             return
-        self.play_button.configure(text="停止播放")
-        self.preview_status.set("正在使用内建播放器播放真实视频")
+        self.playing_clip_index = index
+        self.set_play_button_text(index, "停止播放")
         self.root.after(500, self.watch_player)
 
     def watch_player(self) -> None:
@@ -557,22 +615,30 @@ class DesktopApp:
             self.root.after(500, self.watch_player)
             return
         self.player_process = None
-        self.play_button.configure(text="播放")
-        if self.selected_clip:
-            self.preview_status.set("播放结束，点击播放可重新打开")
+        if self.playing_clip_index is not None:
+            self.set_play_button_text(self.playing_clip_index, "高清播放")
+        self.playing_clip_index = None
 
     def stop_preview(self) -> None:
-        self.play_button.configure(text="播放")
+        if self.playing_clip_index is not None:
+            self.set_play_button_text(self.playing_clip_index, "高清播放")
         if self.player_process and self.player_process.poll() is None:
             self.player_process.terminate()
         self.player_process = None
+        self.playing_clip_index = None
 
-    def delete_selected_clip(self) -> None:
-        clip = self.current_clip()
+    def set_play_button_text(self, index: int, text: str) -> None:
+        button = self.play_buttons.get(index)
+        if button is not None:
+            button.configure(text=text)
+
+    def delete_selected_clip(self, index: int | None = None) -> None:
+        clip = self.current_clip(index)
         if clip is None:
             return
         clip_path = Path(clip.path)
-        if not messagebox.askyesno(APP_TITLE, f"确定删除这个片段吗？\n\n{clip_path.name}"):
+        clip_summary = f"约 {clip.kills} 杀 · {clip.start:.2f}s-{clip.end:.2f}s · {clip.duration:.2f}s"
+        if not messagebox.askyesno(APP_TITLE, f"确定删除这个片段吗？\n\n{clip_summary}"):
             return
         self.stop_preview()
         try:
@@ -586,17 +652,93 @@ class DesktopApp:
         self.clips = [
             item for item in self.clips if Path(item.path).expanduser().resolve() != clip_path
         ]
-        self.refresh_clip_list()
+        self.refresh_clip_cards()
         if self.clips:
-            first = "0"
-            self.clip_list.selection_set(first)
-            self.clip_list.focus(first)
-            self.select_clip()
+            self.select_clip(0)
         else:
             self.selected_clip = None
-            self.preview_badge.set("约 - 杀")
-            self.preview_detail.set("")
-            self.preview_status.set("没有导出片段")
+            self.selected_clip_index = None
+
+    def _thumbnail_worker(self, generation: int, index: int, clip: ClipSegment, seek_seconds: float) -> None:
+        try:
+            thumbnail_path = self.thumbnail_for(clip, seek_seconds)
+            self.events.put(("thumbnail_ready", (generation, index, thumbnail_path)))
+        except Exception:
+            self.events.put(("thumbnail_error", (generation, index)))
+
+    def thumbnail_for(self, clip: ClipSegment, seek_seconds: float) -> Path:
+        clip_path = Path(clip.path).expanduser().resolve()
+        if not clip_path.exists():
+            raise FileNotFoundError(clip_path)
+        cache_dir = self.thumbnail_cache_dir / self.thumbnail_cache_key(clip, seek_seconds)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        thumbnail_path = cache_dir / "thumbnail.jpg"
+        if thumbnail_path.exists():
+            return thumbnail_path
+
+        ffmpeg = resolve_tool("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg 不可用，无法生成低清预览")
+        command = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            f"{seek_seconds:.3f}",
+            "-i",
+            str(clip_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={THUMBNAIL_WIDTH}:-2:flags=fast_bilinear",
+            "-q:v",
+            "8",
+            str(thumbnail_path),
+        ]
+        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "生成低清预览失败")
+        return thumbnail_path
+
+    def thumbnail_seek_seconds(self, clip: ClipSegment) -> float:
+        if clip.duration <= 0.3:
+            return 0.0
+        preferred = max(0.1, float(self.seconds_before.get()))
+        return min(preferred, max(0.0, clip.duration - 0.2))
+
+    def thumbnail_cache_key(self, clip: ClipSegment, seek_seconds: float) -> str:
+        clip_path = Path(clip.path).expanduser().resolve()
+        stat = clip_path.stat()
+        source = (
+            f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}:"
+            f"{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}:{seek_seconds:.3f}"
+        )
+        return hashlib.sha1(source.encode("utf-8")).hexdigest()
+
+    def _handle_thumbnail_ready(self, generation: int, index: int, image_path: Path) -> None:
+        if generation != self.thumbnail_generation or index not in self.thumbnail_labels:
+            return
+        with Image.open(image_path) as image:
+            photo = ImageTk.PhotoImage(self.fit_thumbnail(image))
+        self.thumbnail_photos[index] = photo
+        self.thumbnail_labels[index].configure(image=photo, text="")
+
+    def _handle_thumbnail_error(self, generation: int, index: int) -> None:
+        if generation != self.thumbnail_generation or index not in self.thumbnail_labels:
+            return
+        self.thumbnail_labels[index].configure(text="低清预览生成失败")
+
+    @staticmethod
+    def fit_thumbnail(image: Image.Image) -> Image.Image:
+        image = image.convert("RGB")
+        image.thumbnail((THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), Image.Resampling.BICUBIC)
+        fitted = Image.new("RGB", (THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), (20, 20, 20))
+        left = (THUMBNAIL_WIDTH - image.width) // 2
+        top = (THUMBNAIL_HEIGHT - image.height) // 2
+        fitted.paste(image, (left, top))
+        return fitted
 
     @staticmethod
     def _format_seconds(value: float) -> str:
