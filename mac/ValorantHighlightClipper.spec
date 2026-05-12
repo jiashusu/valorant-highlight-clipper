@@ -11,7 +11,7 @@ datas = [
 ]
 binaries = []
 
-for tool in ("ffmpeg", "ffprobe"):
+for tool in ("ffmpeg", "ffprobe", "ffplay"):
     tool_path = which(tool)
     if tool_path:
         binaries.append((tool_path, "ffmpeg"))
@@ -21,7 +21,7 @@ a = Analysis(
     pathex=[str(project / "src")],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["tkinter", "tkinter.filedialog", "PIL.ImageTk", "numpy.core.multiarray"],
+    hiddenimports=["tkinter", "tkinter.filedialog", "numpy.core.multiarray"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import os
 import queue
-import hashlib
 import subprocess
 import sys
 import threading
-import tempfile
 import webbrowser
 from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
-
-from PIL import Image, ImageTk
 
 from .core import ClipSegment, DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video, resolve_tool
 from .update_checker import UpdateResult, check_for_update
@@ -20,8 +16,6 @@ from .update_checker import UpdateResult, check_for_update
 
 APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
-PREVIEW_FPS = 18
-PREVIEW_WIDTH = 560
 
 
 def open_path(path: Path) -> None:
@@ -64,19 +58,13 @@ class DesktopApp:
         self.worker_thread: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.last_update_prompt_sha: str | None = None
-        self.preview_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_previews"
-        self.preview_frames: list[Path] = []
-        self.preview_images: list[ImageTk.PhotoImage] = []
-        self.preview_index = 0
-        self.preview_after_id: str | None = None
-        self.preview_token = 0
-        self.preview_photo: ImageTk.PhotoImage | None = None
-        self.is_preview_playing = False
+        self.player_process: subprocess.Popen[str] | None = None
         self.preview_status = StringVar(value="选择导出片段后可在这里播放")
         self.preview_badge = StringVar(value="约 - 杀")
         self.preview_detail = StringVar(value="")
 
         self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.after(100, self._drain_events)
         self.root.after(1500, lambda: self.check_for_updates(manual=False))
 
@@ -338,12 +326,9 @@ class DesktopApp:
         self.stop_preview()
         self.clips = []
         self.selected_clip = None
-        self.preview_frames = []
-        self.preview_images = []
         self.preview_badge.set("约 - 杀")
         self.preview_detail.set("")
         self.preview_status.set("等待导出片段")
-        self.preview_image.configure(image="")
         self.clip_list.delete(*self.clip_list.get_children())
         self.start_button.configure(state="disabled")
         self.progress.configure(value=0)
@@ -407,12 +392,6 @@ class DesktopApp:
             elif kind == "update_error":
                 manual, message = payload  # type: ignore[misc]
                 self._handle_update_error(bool(manual), str(message))
-            elif kind == "preview_ready":
-                token, clip_path, frames = payload  # type: ignore[misc]
-                self._handle_preview_ready(int(token), Path(str(clip_path)), frames)  # type: ignore[arg-type]
-            elif kind == "preview_error":
-                token, message = payload  # type: ignore[misc]
-                self._handle_preview_error(int(token), str(message))
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 if self.status.get() != "出错":
@@ -508,10 +487,6 @@ class DesktopApp:
     def select_clip(self, _event: object | None = None) -> None:
         clip = self.current_clip()
         self.stop_preview()
-        self.preview_frames = []
-        self.preview_images = []
-        self.preview_index = 0
-        self.preview_image.configure(image="")
         if clip is None:
             self.selected_clip = None
             self.preview_badge.set("约 - 杀")
@@ -521,11 +496,7 @@ class DesktopApp:
         self.selected_clip = clip
         self.preview_badge.set(f"约 {clip.kills} 杀")
         self.preview_detail.set(f"{clip.name}  ·  {clip.duration:.2f}s")
-        self.preview_status.set("正在准备预览")
-        self.preview_token += 1
-        token = self.preview_token
-        thread = threading.Thread(target=self._preview_worker, args=(token, clip), daemon=True)
-        thread.start()
+        self.preview_status.set("已选择片段，点击播放会打开内建播放器")
 
     def current_clip(self) -> ClipSegment | None:
         selection = self.clip_list.selection()
@@ -539,115 +510,62 @@ class DesktopApp:
             return None
         return self.clips[index]
 
-    def _preview_worker(self, token: int, clip: ClipSegment) -> None:
-        try:
-            frames = self.preview_frames_for(Path(clip.path))
-            self.events.put(("preview_ready", (token, clip.path, frames)))
-        except Exception as exc:
-            self.events.put(("preview_error", (token, str(exc))))
-
-    def preview_frames_for(self, clip_path: Path) -> list[Path]:
-        clip_path = clip_path.expanduser().resolve()
+    def toggle_preview_playback(self) -> None:
+        if self.player_process and self.player_process.poll() is None:
+            self.stop_preview()
+            return
+        clip = self.current_clip()
+        if clip is None:
+            return
+        clip_path = Path(clip.path).expanduser().resolve()
         if not clip_path.exists():
-            raise FileNotFoundError(clip_path)
-        cache_dir = self.preview_cache_dir / self.preview_cache_key(clip_path)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        frames = sorted(cache_dir.glob("frame_*.jpg"))
-        if frames:
-            return frames
-
-        ffmpeg = resolve_tool("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("ffmpeg 不可用，无法生成预览")
+            messagebox.showwarning(APP_TITLE, f"片段不存在：{clip_path}")
+            return
+        ffplay = resolve_tool("ffplay")
+        if not ffplay:
+            messagebox.showerror(APP_TITLE, "没有找到内建播放器 ffplay，请重新打包 App。")
+            return
         command = [
-            ffmpeg,
+            ffplay,
             "-hide_banner",
             "-loglevel",
             "error",
-            "-y",
-            "-i",
+            "-autoexit",
+            "-window_title",
+            f"{APP_TITLE} - {clip.name}",
             str(clip_path),
-            "-vf",
-            f"fps={PREVIEW_FPS},scale={PREVIEW_WIDTH}:-2:flags=lanczos",
-            str(cache_dir / "frame_%05d.jpg"),
         ]
-        result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "生成预览失败")
-        frames = sorted(cache_dir.glob("frame_*.jpg"))
-        if not frames:
-            raise RuntimeError("没有生成可播放预览帧")
-        return frames
+        try:
+            self.player_process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"播放器启动失败: {exc}")
+            return
+        self.play_button.configure(text="停止播放")
+        self.preview_status.set("正在使用内建播放器播放真实视频")
+        self.root.after(500, self.watch_player)
 
-    @staticmethod
-    def preview_cache_key(clip_path: Path) -> str:
-        stat = clip_path.stat()
-        source = f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}:fps={PREVIEW_FPS}:width={PREVIEW_WIDTH}"
-        return hashlib.sha1(source.encode("utf-8")).hexdigest()
-
-    def _handle_preview_ready(self, token: int, clip_path: Path, frames: list[Path]) -> None:
-        if token != self.preview_token:
+    def watch_player(self) -> None:
+        if self.player_process is None:
             return
-        if self.selected_clip is None or Path(self.selected_clip.path).expanduser().resolve() != clip_path:
+        if self.player_process.poll() is None:
+            self.root.after(500, self.watch_player)
             return
-        self.preview_status.set("正在载入预览")
-        self.preview_frames = list(frames)
-        self.preview_images = self.load_preview_images(self.preview_frames)
-        self.preview_index = 0
-        self.preview_status.set("")
-        self.show_preview_frame(0)
-
-    def _handle_preview_error(self, token: int, message: str) -> None:
-        if token != self.preview_token:
-            return
-        self.preview_status.set(f"预览失败: {message}")
-        self.preview_image.configure(image="")
-
-    def load_preview_images(self, frames: list[Path]) -> list[ImageTk.PhotoImage]:
-        images: list[ImageTk.PhotoImage] = []
-        for frame in frames:
-            with Image.open(frame) as image:
-                images.append(ImageTk.PhotoImage(image.copy()))
-        return images
-
-    def show_preview_frame(self, index: int) -> None:
-        if not self.preview_images:
-            return
-        index = max(0, min(index, len(self.preview_images) - 1))
-        self.preview_photo = self.preview_images[index]
-        self.preview_image.configure(image=self.preview_photo, text="")
-
-    def toggle_preview_playback(self) -> None:
-        if not self.preview_images:
-            if self.selected_clip:
-                self.preview_status.set("预览还在准备中")
-            return
-        if self.is_preview_playing:
-            self.stop_preview()
-            return
-        self.is_preview_playing = True
-        self.play_button.configure(text="暂停")
-        if self.preview_index >= len(self.preview_images) - 1:
-            self.preview_index = 0
-        self.advance_preview()
-
-    def advance_preview(self) -> None:
-        if not self.is_preview_playing or not self.preview_images:
-            return
-        self.show_preview_frame(self.preview_index)
-        self.preview_index += 1
-        if self.preview_index >= len(self.preview_images):
-            self.stop_preview()
-            self.preview_index = len(self.preview_images) - 1
-            return
-        self.preview_after_id = self.root.after(int(1000 / PREVIEW_FPS), self.advance_preview)
+        self.player_process = None
+        self.play_button.configure(text="播放")
+        if self.selected_clip:
+            self.preview_status.set("播放结束，点击播放可重新打开")
 
     def stop_preview(self) -> None:
-        self.is_preview_playing = False
         self.play_button.configure(text="播放")
-        if self.preview_after_id:
-            self.root.after_cancel(self.preview_after_id)
-            self.preview_after_id = None
+        if self.player_process and self.player_process.poll() is None:
+            self.player_process.terminate()
+        self.player_process = None
 
     def delete_selected_clip(self) -> None:
         clip = self.current_clip()
@@ -676,9 +594,6 @@ class DesktopApp:
             self.select_clip()
         else:
             self.selected_clip = None
-            self.preview_frames = []
-            self.preview_images = []
-            self.preview_image.configure(image="")
             self.preview_badge.set("约 - 杀")
             self.preview_detail.set("")
             self.preview_status.set("没有导出片段")
@@ -698,6 +613,10 @@ class DesktopApp:
 
     def run(self) -> None:
         self.root.mainloop()
+
+    def close(self) -> None:
+        self.stop_preview()
+        self.root.destroy()
 
 
 def main() -> None:
