@@ -23,8 +23,7 @@ UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 THUMBNAIL_WIDTH = 260
 THUMBNAIL_HEIGHT = 146
 CLIP_CARD_COLUMNS = 3
-PREVIEW_VIDEO_WIDTH = 960
-PREVIEW_VIDEO_CRF = 28
+CARD_PREVIEW_FPS = 20
 
 
 def open_path(path: Path) -> None:
@@ -73,11 +72,14 @@ class DesktopApp:
         self.playing_mode: str | None = None
         self.preview_play_token = 0
         self.thumbnail_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_thumbnails"
-        self.preview_video_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_preview_videos"
+        self.card_preview_cache_dir = Path(tempfile.gettempdir()) / "valorant_clipper_card_previews"
         self.thumbnail_generation = 0
         self.thumbnail_photos: dict[int, ImageTk.PhotoImage] = {}
         self.thumbnail_labels: dict[int, ttk.Label] = {}
         self.play_buttons: dict[int, ttk.Button] = {}
+        self.card_preview_images: list[ImageTk.PhotoImage] = []
+        self.card_preview_frame_index = 0
+        self.card_preview_after_id: str | None = None
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -392,12 +394,12 @@ class DesktopApp:
             elif kind == "thumbnail_error":
                 generation, index = payload  # type: ignore[misc]
                 self._handle_thumbnail_error(int(generation), int(index))
-            elif kind == "preview_video_ready":
-                token, index, video_path = payload  # type: ignore[misc]
-                self._handle_preview_video_ready(int(token), int(index), Path(str(video_path)))
-            elif kind == "preview_video_error":
+            elif kind == "card_preview_ready":
+                token, index, frames = payload  # type: ignore[misc]
+                self._handle_card_preview_ready(int(token), int(index), frames)  # type: ignore[arg-type]
+            elif kind == "card_preview_error":
                 token, message = payload  # type: ignore[misc]
-                self._handle_preview_video_error(int(token), str(message))
+                self._handle_card_preview_error(int(token), str(message))
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 if self.status.get() != "出错":
@@ -597,38 +599,54 @@ class DesktopApp:
             index = self.selected_clip_index
         if index is None:
             return
+        if self.playing_clip_index == index and self.playing_mode == "card":
+            self.stop_preview()
+            return
         if self.player_process and self.player_process.poll() is None:
-            if self.playing_clip_index == index and self.playing_mode == "preview":
-                self.stop_preview()
-                return
             self.stop_preview()
         clip = self.current_clip(index)
         if clip is None:
             return
+        self.stop_card_preview(reset_image=True)
         self.select_clip(index)
         self.preview_play_token += 1
         token = self.preview_play_token
-        self.status.set(f"生成低清预览: Highlight #{index + 1:03d}")
-        thread = threading.Thread(target=self._preview_video_worker, args=(token, index, clip), daemon=True)
+        self.playing_clip_index = index
+        self.playing_mode = "card"
+        self.status.set(f"准备卡片预览: Highlight #{index + 1:03d}")
+        label = self.thumbnail_labels.get(index)
+        if label is not None:
+            label.configure(text="载入预览中")
+        thread = threading.Thread(target=self._card_preview_worker, args=(token, index, clip), daemon=True)
         thread.start()
 
-    def _preview_video_worker(self, token: int, index: int, clip: ClipSegment) -> None:
+    def _card_preview_worker(self, token: int, index: int, clip: ClipSegment) -> None:
         try:
-            preview_path = self.preview_video_for(clip)
-            self.events.put(("preview_video_ready", (token, index, preview_path)))
+            frames = self.card_preview_frames_for(clip)
+            self.events.put(("card_preview_ready", (token, index, frames)))
         except Exception as exc:
-            self.events.put(("preview_video_error", (token, str(exc))))
+            self.events.put(("card_preview_error", (token, str(exc))))
 
-    def _handle_preview_video_ready(self, token: int, index: int, video_path: Path) -> None:
+    def _handle_card_preview_ready(self, token: int, index: int, frames: list[Path]) -> None:
         if token != self.preview_play_token:
             return
-        self.start_player(index, video_path, "preview")
+        if self.playing_clip_index != index or self.playing_mode != "card":
+            return
+        try:
+            self.card_preview_images = self.load_card_preview_images(frames)
+        except Exception as exc:
+            self._handle_card_preview_error(token, str(exc))
+            return
+        self.card_preview_frame_index = 0
+        self.status.set(f"卡片内预览: Highlight #{index + 1:03d}")
+        self.advance_card_preview()
 
-    def _handle_preview_video_error(self, token: int, message: str) -> None:
+    def _handle_card_preview_error(self, token: int, message: str) -> None:
         if token != self.preview_play_token:
             return
-        self.status.set("低清预览失败")
-        messagebox.showerror(APP_TITLE, f"低清预览生成失败: {message}")
+        self.stop_card_preview()
+        self.status.set("卡片预览失败")
+        messagebox.showerror(APP_TITLE, f"卡片预览生成失败: {message}")
 
     def play_high_quality(self, index: int | None = None) -> None:
         if index is None:
@@ -636,6 +654,8 @@ class DesktopApp:
         if index is None:
             return
         self.preview_play_token += 1
+        if self.playing_mode == "card":
+            self.stop_card_preview(reset_image=True)
         if self.player_process and self.player_process.poll() is None:
             if self.playing_clip_index == index and self.playing_mode == "high":
                 self.stop_preview()
@@ -703,6 +723,7 @@ class DesktopApp:
 
     def stop_preview(self) -> None:
         self.preview_play_token += 1
+        self.stop_card_preview(reset_image=True)
         if self.playing_clip_index is not None and self.playing_mode == "high":
             self.set_play_button_text(self.playing_clip_index, "高清播放")
         if self.player_process and self.player_process.poll() is None:
@@ -743,22 +764,24 @@ class DesktopApp:
             self.selected_clip = None
             self.selected_clip_index = None
 
-    def preview_video_for(self, clip: ClipSegment) -> Path:
+    def card_preview_frames_for(self, clip: ClipSegment) -> list[Path]:
         clip_path = Path(clip.path).expanduser().resolve()
         if not clip_path.exists():
             raise FileNotFoundError(clip_path)
-        cache_dir = self.preview_video_cache_dir / self.preview_video_cache_key(clip)
+        cache_dir = self.card_preview_cache_dir / self.card_preview_cache_key(clip)
         cache_dir.mkdir(parents=True, exist_ok=True)
-        preview_path = cache_dir / "preview.mp4"
-        if preview_path.exists() and preview_path.stat().st_size > 0:
-            return preview_path
+        frames = sorted(cache_dir.glob("frame_*.jpg"))
+        if frames:
+            return frames
 
         ffmpeg = resolve_tool("ffmpeg")
         if not ffmpeg:
-            raise RuntimeError("ffmpeg 不可用，无法生成低清预览")
-        temporary_path = cache_dir / "preview.tmp.mp4"
-        if temporary_path.exists():
-            temporary_path.unlink()
+            raise RuntimeError("ffmpeg 不可用，无法生成卡片预览")
+        temporary_dir = cache_dir / "tmp"
+        if temporary_dir.exists():
+            for old_frame in temporary_dir.glob("*.jpg"):
+                old_frame.unlink()
+        temporary_dir.mkdir(parents=True, exist_ok=True)
         command = [
             ffmpeg,
             "-hide_banner",
@@ -767,44 +790,74 @@ class DesktopApp:
             "-y",
             "-i",
             str(clip_path),
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a?",
             "-vf",
-            f"scale={PREVIEW_VIDEO_WIDTH}:-2:flags=bilinear",
-            "-r",
-            "30",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            str(PREVIEW_VIDEO_CRF),
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "96k",
-            "-movflags",
-            "+faststart",
-            str(temporary_path),
+            f"fps={CARD_PREVIEW_FPS},scale={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={THUMBNAIL_WIDTH}:{THUMBNAIL_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black",
+            "-q:v",
+            "5",
+            str(temporary_dir / "frame_%05d.jpg"),
         ]
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "生成低清预览失败")
-        temporary_path.replace(preview_path)
-        return preview_path
+            raise RuntimeError(result.stderr.strip() or "生成卡片预览失败")
+        frames = sorted(temporary_dir.glob("frame_*.jpg"))
+        if not frames:
+            raise RuntimeError("没有生成卡片预览帧")
+        for frame in frames:
+            frame.replace(cache_dir / frame.name)
+        temporary_dir.rmdir()
+        return sorted(cache_dir.glob("frame_*.jpg"))
 
-    def preview_video_cache_key(self, clip: ClipSegment) -> str:
+    def card_preview_cache_key(self, clip: ClipSegment) -> str:
         clip_path = Path(clip.path).expanduser().resolve()
         stat = clip_path.stat()
         source = (
             f"{clip_path}:{stat.st_size}:{stat.st_mtime_ns}:"
-            f"preview_width={PREVIEW_VIDEO_WIDTH}:crf={PREVIEW_VIDEO_CRF}:fps=30"
+            f"card_preview={THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}:fps={CARD_PREVIEW_FPS}:q=5"
         )
         return hashlib.sha1(source.encode("utf-8")).hexdigest()
+
+    def load_card_preview_images(self, frames: list[Path]) -> list[ImageTk.PhotoImage]:
+        images: list[ImageTk.PhotoImage] = []
+        for frame in frames:
+            with Image.open(frame) as image:
+                images.append(ImageTk.PhotoImage(image.copy()))
+        return images
+
+    def advance_card_preview(self) -> None:
+        index = self.playing_clip_index
+        if index is None or self.playing_mode != "card" or not self.card_preview_images:
+            return
+        label = self.thumbnail_labels.get(index)
+        if label is None:
+            self.stop_card_preview(reset_image=False)
+            return
+        if self.card_preview_frame_index >= len(self.card_preview_images):
+            self.stop_card_preview()
+            if self.status.get().startswith("卡片内预览"):
+                self.status.set("完成")
+            return
+        label.configure(image=self.card_preview_images[self.card_preview_frame_index], text="")
+        self.card_preview_frame_index += 1
+        self.card_preview_after_id = self.root.after(int(1000 / CARD_PREVIEW_FPS), self.advance_card_preview)
+
+    def stop_card_preview(self, reset_image: bool = True) -> None:
+        if self.card_preview_after_id:
+            self.root.after_cancel(self.card_preview_after_id)
+            self.card_preview_after_id = None
+        if reset_image and self.playing_clip_index is not None and self.playing_mode == "card":
+            label = self.thumbnail_labels.get(self.playing_clip_index)
+            photo = self.thumbnail_photos.get(self.playing_clip_index)
+            if label is not None:
+                if photo is not None:
+                    label.configure(image=photo, text="")
+                else:
+                    label.configure(image="", text="生成低清预览中")
+        self.card_preview_images = []
+        self.card_preview_frame_index = 0
+        if self.playing_mode == "card":
+            self.playing_clip_index = None
+            self.playing_mode = None
 
     def _thumbnail_worker(self, generation: int, index: int, clip: ClipSegment, seek_seconds: float) -> None:
         try:
@@ -870,6 +923,8 @@ class DesktopApp:
         with Image.open(image_path) as image:
             photo = ImageTk.PhotoImage(self.fit_thumbnail(image))
         self.thumbnail_photos[index] = photo
+        if self.playing_mode == "card" and self.playing_clip_index == index:
+            return
         self.thumbnail_labels[index].configure(image=photo, text="")
 
     def _handle_thumbnail_error(self, generation: int, index: int) -> None:
