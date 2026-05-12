@@ -12,7 +12,7 @@ from pathlib import Path
 from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from .core import ClipSegment, DEFAULT_OUTPUT_DIR, DEFAULT_SOURCE_DIR, discover_videos, process_video, resolve_tool
 from .update_checker import UpdateResult, check_for_update
@@ -22,6 +22,7 @@ APP_TITLE = "Valorant 高光剪辑"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 THUMBNAIL_WIDTH = 260
 THUMBNAIL_HEIGHT = 146
+CLIP_CARD_COLUMNS = 3
 
 
 def open_path(path: Path) -> None:
@@ -191,7 +192,12 @@ class DesktopApp:
         ttk.Label(parent, text="处理日志").grid(row=0, column=0, sticky="w")
         self.log_box = self._text(parent, row=1)
 
-        ttk.Label(parent, text="导出片段").grid(row=2, column=0, sticky="w", pady=(12, 0))
+        results_header = ttk.Frame(parent)
+        results_header.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        results_header.columnconfigure(1, weight=1)
+        ttk.Label(results_header, text="Highlights").grid(row=0, column=0, sticky="w")
+        ttk.Label(results_header, text="低清预览 / 高清播放").grid(row=0, column=1, sticky="e")
+
         clips_frame = ttk.Frame(parent)
         clips_frame.grid(row=3, column=0, sticky="nsew")
         clips_frame.columnconfigure(0, weight=1)
@@ -470,6 +476,8 @@ class DesktopApp:
         self.play_buttons = {}
         for child in self.clips_container.winfo_children():
             child.destroy()
+        for column in range(CLIP_CARD_COLUMNS):
+            self.clips_container.columnconfigure(column, weight=1, uniform="clip_cards")
         self.selected_clip_index = None
         if not self.clips:
             self.empty_clips_label = ttk.Label(
@@ -491,38 +499,50 @@ class DesktopApp:
             thread.start()
 
     def render_clip_card(self, index: int, clip: ClipSegment) -> None:
+        row = index // CLIP_CARD_COLUMNS
+        column = index % CLIP_CARD_COLUMNS
         card = ttk.Frame(self.clips_container, padding=8, relief="ridge")
-        card.grid(row=index, column=0, sticky="ew", pady=(0, 8))
+        card.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
         card.columnconfigure(0, weight=1)
-        card.columnconfigure(1, weight=0)
-        self.clips_container.columnconfigure(0, weight=1)
 
         preview = ttk.Label(
             card,
             text="生成低清预览中",
             anchor="center",
             relief="sunken",
-            width=36,
+            width=34,
         )
         preview.grid(row=0, column=0, sticky="ew")
         preview.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
         preview.bind("<Double-1>", lambda _event, i=index: self.toggle_preview_playback(i))
         self.thumbnail_labels[index] = preview
 
+        title = ttk.Label(
+            card,
+            text=f"Highlight #{index + 1:03d}",
+            font=("", 11, "bold"),
+            anchor="w",
+        )
+        title.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        title.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
+
         info = ttk.Label(
             card,
             text=(
-                f"约 {clip.kills} 杀\n"
-                f"开始 {clip.start:.2f}s   结束 {clip.end:.2f}s   长度 {clip.duration:.2f}s"
+                f"约 {clip.kills} 杀  ·  {clip.duration:.2f}s\n"
+                f"{clip.start:.2f}s - {clip.end:.2f}s"
             ),
             anchor="w",
             justify="left",
         )
-        info.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        info.grid(row=2, column=0, sticky="ew", pady=(2, 0))
         info.bind("<Button-1>", lambda _event, i=index: self.select_clip(i))
 
         actions = ttk.Frame(card)
-        actions.grid(row=0, column=1, rowspan=2, sticky="n", padx=(10, 0))
+        actions.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+        actions.columnconfigure(2, weight=1)
         play_button = ttk.Button(
             actions,
             text="高清播放",
@@ -530,10 +550,10 @@ class DesktopApp:
         )
         play_button.grid(row=0, column=0, sticky="ew")
         ttk.Button(actions, text="打开目录", command=lambda i=index: self.open_selected_clip(i)).grid(
-            row=1, column=0, sticky="ew", pady=(6, 0)
+            row=0, column=1, sticky="ew", padx=(6, 0)
         )
         ttk.Button(actions, text="删除", command=lambda i=index: self.delete_selected_clip(i)).grid(
-            row=2, column=0, sticky="ew", pady=(6, 0)
+            row=0, column=2, sticky="ew", padx=(6, 0)
         )
         self.play_buttons[index] = play_button
 
@@ -738,6 +758,23 @@ class DesktopApp:
         left = (THUMBNAIL_WIDTH - image.width) // 2
         top = (THUMBNAIL_HEIGHT - image.height) // 2
         fitted.paste(image, (left, top))
+        overlay = Image.new("RGBA", fitted.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        center_x = THUMBNAIL_WIDTH // 2
+        center_y = THUMBNAIL_HEIGHT // 2
+        draw.ellipse(
+            (center_x - 22, center_y - 22, center_x + 22, center_y + 22),
+            fill=(0, 0, 0, 110),
+        )
+        draw.polygon(
+            [
+                (center_x - 7, center_y - 13),
+                (center_x - 7, center_y + 13),
+                (center_x + 15, center_y),
+            ],
+            fill=(255, 255, 255, 220),
+        )
+        fitted = Image.alpha_composite(fitted.convert("RGBA"), overlay).convert("RGB")
         return fitted
 
     @staticmethod
