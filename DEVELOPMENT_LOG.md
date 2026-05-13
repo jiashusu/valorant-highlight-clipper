@@ -2,6 +2,18 @@
 
 ## 2026-05-13
 
+### 清理记录：移除 Vercel 项目页部署
+
+- 需求来源：
+  - 用户要求去掉 GitHub 上和本地的 Vercel 功能。
+- 本次修改：
+  - 删除 Vercel 部署配置：`vercel.json`、`.vercelignore`。
+  - 删除 Vercel 静态项目页入口：`package.json`、`public/index.html`。
+  - 清理本地未跟踪的 `.vercel/` 链接信息和旧 `dist/index.html` 项目页产物。
+  - 保留 macOS 原生 AppKit 桌面应用、剪辑核心、更新检查、打包脚本和 release `.app`。
+- Windows 同步提示：
+  - Windows 端无需同步 Vercel 项目页；后续只同步桌面 App 功能和 UI 变更。
+
 ### 更新记录：macOS AppKit UI 二次深度优化
 
 - 需求来源：

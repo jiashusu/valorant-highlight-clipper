@@ -1,9 +1,0 @@
-{
-  "name": "valorant-highlight-clipper",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "build": "mkdir -p dist && cp -R public/* dist/"
-  }
-}
-
