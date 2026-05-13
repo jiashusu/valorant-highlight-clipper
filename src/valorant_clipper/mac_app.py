@@ -297,9 +297,30 @@ class GradientView(FlippedView):
 class CenteredTextFieldCell(NSTextFieldCell):
     def drawingRectForBounds_(self, rect):
         drawing = objc.super(CenteredTextFieldCell, self).drawingRectForBounds_(rect)
-        cell_size = self.cellSizeForBounds_(rect)
-        drawing.origin.y = rect.origin.y + max(0, (rect.size.height - cell_size.height) / 2) - 1
+        text_size = self.cellSizeForBounds_(rect)
+        height_delta = max(0, drawing.size.height - text_size.height)
+        drawing.origin.y += height_delta / 2
+        drawing.size.height -= height_delta
         return drawing
+
+    def editWithFrame_inView_editor_delegate_event_(self, rect, control_view, text_obj, delegate, event):
+        objc.super(CenteredTextFieldCell, self).editWithFrame_inView_editor_delegate_event_(
+            self.drawingRectForBounds_(rect),
+            control_view,
+            text_obj,
+            delegate,
+            event,
+        )
+
+    def selectWithFrame_inView_editor_delegate_start_length_(self, rect, control_view, text_obj, delegate, start, length):
+        objc.super(CenteredTextFieldCell, self).selectWithFrame_inView_editor_delegate_start_length_(
+            self.drawingRectForBounds_(rect),
+            control_view,
+            text_obj,
+            delegate,
+            start,
+            length,
+        )
 
 
 def set_layer(view, radius: float, background: NSColor | None = None, border: NSColor | None = None) -> None:
@@ -341,6 +362,9 @@ def label(text: str, frame, size: float = 13, weight: float = 0.0, color: NSColo
 def text_field(value: str, frame):
     field = NSTextField.alloc().initWithFrame_(frame)
     cell = CenteredTextFieldCell.alloc().initTextCell_(value)
+    cell.setFont_(NSFont.systemFontOfSize_(13))
+    cell.setUsesSingleLineMode_(True)
+    cell.setWraps_(False)
     field.setCell_(cell)
     field.setStringValue_(value)
     field.setBezeled_(False)
@@ -371,6 +395,7 @@ def button(title: str, frame, target, action: str, kind: str = "secondary"):
     item.setBordered_(False)
     item.setFocusRingType_(NSFocusRingTypeNone)
     item.setRefusesFirstResponder_(True)
+    item.setFont_(NSFont.systemFontOfSize_weight_(13, 0.28))
     if kind == "primary":
         bg, fg = COLORS["accent"], COLORS["accent_text"]
     elif kind == "danger":

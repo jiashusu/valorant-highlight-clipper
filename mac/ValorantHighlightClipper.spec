@@ -8,6 +8,7 @@ project = Path.cwd()
 
 datas = [
     (str(project / "assets" / "valorant_clipper"), "assets/valorant_clipper"),
+    (str(project / "assets" / "app_icon" / "ValorantHighlightClipper.icns"), "."),
 ]
 binaries = []
 
@@ -68,6 +69,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="ValorantHighlightClipper.app",
-    icon=None,
+    icon=str(project / "assets" / "app_icon" / "ValorantHighlightClipper.icns"),
     bundle_identifier="com.jiashusu.valorant-highlight-clipper",
 )

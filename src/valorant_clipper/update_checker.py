@@ -37,7 +37,15 @@ class UpdateResult:
 def short_sha(value: str) -> str:
     if not value or value == "unknown":
         return "unknown"
-    return value[:7]
+    return value.strip().lower()[:7]
+
+
+def shas_match(current_sha: str, remote_sha: str | None) -> bool:
+    current = (current_sha or "").strip().lower()
+    remote = (remote_sha or "").strip().lower()
+    if not current or not remote or current == "unknown":
+        return False
+    return current.startswith(remote) or remote.startswith(current) or short_sha(current) == short_sha(remote)
 
 
 def check_for_update() -> UpdateResult:
@@ -51,7 +59,7 @@ def check_for_update() -> UpdateResult:
             message=f"当前 App 没有打包版本信息。最新提交: {short_sha(remote_sha)}",
         )
 
-    if remote_sha.startswith(current_sha) or current_sha.startswith(remote_sha):
+    if shas_match(current_sha, remote_sha):
         return UpdateResult(
             current_sha=current_sha,
             remote_sha=remote_sha,
