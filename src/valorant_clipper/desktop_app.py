@@ -29,7 +29,6 @@ from .update_checker import UpdateResult, check_for_update
 
 APP_TITLE = "Valorant 高光剪辑"
 APP_VERSION = "macOS v1.3.2"
-UPDATE_BADGE = "已同步 Windows v1.3.2 · 384x216 预览 · Finder 精确定位"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 THUMBNAIL_WIDTH = 384
 THUMBNAIL_HEIGHT = 216
@@ -160,7 +159,6 @@ class DesktopApp:
         style.configure("Muted.TLabel", background=COLORS["bg"], foreground=COLORS["muted"])
         style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=TITLE_FONT)
         style.configure("Version.TLabel", background=COLORS["bg"], foreground=COLORS["accent"], font=UI_FONT_BOLD)
-        style.configure("Badge.TLabel", background=COLORS["accent"], foreground="#041016", font=UI_FONT_BOLD)
         style.configure("Warning.TLabel", background=COLORS["warning_bg"], foreground=COLORS["warning"])
         style.configure("Card.TFrame", background=COLORS["card"], relief="flat")
         style.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"])
@@ -245,9 +243,6 @@ class DesktopApp:
         ttk.Label(header, textvariable=self.status, style="Muted.TLabel").grid(row=0, column=1, sticky="e")
         ttk.Button(header, text="检查更新", command=lambda: self.check_for_updates(manual=True)).grid(
             row=0, column=2, sticky="e", padx=(10, 0)
-        )
-        ttk.Label(header, text=UPDATE_BADGE, anchor="center", padding=(10, 5), style="Badge.TLabel").grid(
-            row=1, column=0, columnspan=3, sticky="ew", pady=(10, 0)
         )
 
         body = ttk.PanedWindow(self.root, orient="horizontal")
