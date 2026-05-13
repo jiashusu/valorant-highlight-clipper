@@ -1,5 +1,23 @@
 # 开发日志
 
+## 2026-05-13
+
+### 更新记录：macOS 原生 AppKit 玻璃风 UI 重做
+
+- 需求来源：
+  - 用户反馈当前 Tkinter 界面按钮、线条和排版仍然很旧，希望改成暗色、圆润、玻璃感更强的 Apple 风。
+- 本次修改：
+  - 新增 `src/valorant_clipper/mac_app.py`，使用原生 macOS AppKit / PyObjC 构建主界面。
+  - `mac/launcher.py` 改为启动 AppKit 版，旧 `desktop_app.py` 保留为历史 fallback，不再作为 macOS 打包入口。
+  - 新增 `src/valorant_clipper/preview_cache.py`，把缩略图和卡片低清预览帧缓存从 Tkinter UI 中抽离。
+  - `requirements.txt` 增加 `pyobjc-framework-Cocoa`，`mac/ValorantHighlightClipper.spec` 增加 AppKit/PyObjC hidden imports，并移除 Tkinter/ImageTk 入口依赖。
+  - 主界面改为深黑蓝渐变背景、半透明玻璃面板、圆角输入框、胶囊按钮和低对比边线。
+  - Highlights 区保留三列卡片墙：卡片内可直接播放低清预览，旁边保留高清播放、Finder 定位和删除功能。
+  - 文件夹、视频、输出目录选择改用原生 `NSOpenPanel`。
+  - 更新检查、开发日志、ffmpeg/ffprobe/ffplay、剪辑核心和队友击杀过滤逻辑保持不变。
+- Windows 同步提示：
+  - Windows 端可以继续保留现有实现；如需同步视觉，可参考本次 AppKit 版的卡片层级、圆角尺寸、按钮状态和预览缓存模块。
+
 ## 2026-05-12
 
 ### 调整记录：移除顶部青色同步横幅
