@@ -135,7 +135,7 @@ TEXTS = {
         "output_dir": "输出目录",
         "choose_output": "选择输出目录",
         "open_output": "打开输出目录",
-        "settings": "参数",
+        "settings": "参数（建议不要动，除非你懂什么意思）",
         "confidence": "置信度",
         "framerate": "识别帧率",
         "seconds_before": "提前秒数",
@@ -169,6 +169,7 @@ TEXTS = {
         "confirm": "确定",
         "cancel": "取消",
         "start": "开始剪辑",
+        "start_busy": "剪辑中",
         "ready": "准备就绪",
         "scanning": "扫描中",
         "checking_update": "检查更新中",
@@ -195,6 +196,9 @@ TEXTS = {
         "deleted_log": "已删除片段: {name}\n",
         "finished_log": "完成，导出 {count} 个片段\n",
         "clip_info": "约 {kills} 杀 · {duration:.2f}s\n{start:.2f}s - {end:.2f}s",
+        "estimate_under_minute": "约 1 分钟内",
+        "estimate_minutes": "约 {low}-{high} 分钟",
+        "estimate_log": "预计可能需要：{estimate}。导出时间取决于视频长度、电脑性能、识别帧率和导出设置。处理时可以去喝杯茶，放松一下。",
         "update_open": "{message}\n\n是否打开 GitHub Actions 下载新版 macOS App？",
     },
     "en": {
@@ -210,7 +214,7 @@ TEXTS = {
         "output_dir": "Output folder",
         "choose_output": "Choose output",
         "open_output": "Open output",
-        "settings": "Settings",
+        "settings": "Settings (do not change unless you know what they mean)",
         "confidence": "Confidence",
         "framerate": "Scan FPS",
         "seconds_before": "Before seconds",
@@ -244,6 +248,7 @@ TEXTS = {
         "confirm": "OK",
         "cancel": "Cancel",
         "start": "Start Clipping",
+        "start_busy": "Clipping",
         "ready": "Ready",
         "scanning": "Scanning",
         "checking_update": "Checking updates",
@@ -270,6 +275,9 @@ TEXTS = {
         "deleted_log": "Deleted clip: {name}\n",
         "finished_log": "Done, exported {count} clips\n",
         "clip_info": "~{kills} kills · {duration:.2f}s\n{start:.2f}s - {end:.2f}s",
+        "estimate_under_minute": "about under 1 minute",
+        "estimate_minutes": "about {low}-{high} minutes",
+        "estimate_log": "Estimated time: {estimate}. Export time depends on video length, Mac performance, scan FPS, and export settings. You can grab a drink and relax while it runs.",
         "update_open": "{message}\n\nOpen GitHub Actions to download the new macOS App?",
     },
 }
@@ -437,6 +445,28 @@ def format_size(size_bytes: int) -> str:
     return f"{value:.1f} GB"
 
 
+def estimate_minutes_range(
+    video_duration: float,
+    max_seconds: float | None,
+    framerate: int,
+    copy_streams: bool,
+) -> tuple[int, int]:
+    analysis_seconds = max(0.0, video_duration)
+    if max_seconds is not None:
+        analysis_seconds = min(analysis_seconds, max(0.0, max_seconds))
+    low_seconds = analysis_seconds * 0.20
+    high_seconds = analysis_seconds * 0.45
+    if copy_streams:
+        low_seconds *= 0.75
+        high_seconds *= 0.75
+    if framerate > 12:
+        low_seconds *= 1.25
+        high_seconds *= 1.25
+    low_minutes = max(1, int((low_seconds + 59) // 60))
+    high_minutes = max(low_minutes, int((high_seconds + 59) // 60))
+    return low_minutes, high_minutes
+
+
 class MacClipperController(NSObject):
     def init(self):
         self = objc.super(MacClipperController, self).init()
@@ -551,6 +581,13 @@ class MacClipperController(NSObject):
             item.setStringValue_(self.text(key))
         for item, key, kind in self.localized_buttons:
             self.set_button_text(item, self.text(key), kind)
+        if (
+            hasattr(self, "start_button")
+            and self.status_key == "trimming"
+            and self.worker_thread
+            and self.worker_thread.is_alive()
+        ):
+            self.set_button_text(self.start_button, self.text("start_busy"), "primary")
         if hasattr(self, "status_label"):
             self.status_label.setStringValue_(self.text(self.status_key, **self.status_kwargs))
         if hasattr(self, "warning_label"):
@@ -621,7 +658,7 @@ class MacClipperController(NSObject):
         self.left_panel.addSubview_(self.localized_button("choose_output", NSMakeRect(x, y + 232, 140, 36), "chooseOutputDir:", "secondary"))
         self.left_panel.addSubview_(self.localized_button("open_output", NSMakeRect(x + 152, y + 232, 140, 36), "openOutputDir:", "secondary"))
 
-        self.left_panel.addSubview_(self.localized_label("settings", NSMakeRect(x, y + 305, 100, 28), 18, 0.28))
+        self.left_panel.addSubview_(self.localized_label("settings", NSMakeRect(x, y + 305, 460, 28), 18, 0.28))
         self.confidence_field = self.add_number_row("confidence", "0.93", x, y + 350)
         self.framerate_field = self.add_number_row("framerate", "8", x + 330, y + 350)
         self.before_field = self.add_number_row("seconds_before", "4.0", x, y + 395)
@@ -775,6 +812,9 @@ class MacClipperController(NSObject):
             self.events.put(("worker_done", None))
 
     def startJob_(self, _sender) -> None:
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.show_alert(self.text("busy"))
+            return
         if self.selected_video is None:
             self.select_first_video()
         if self.selected_video is None:
@@ -785,6 +825,7 @@ class MacClipperController(NSObject):
         self.selected_clip_index = None
         self.show_empty_clips("preparing_title", "preparing_detail")
         self.start_button.setEnabled_(False)
+        self.set_button_text(self.start_button, self.text("start_busy"), "primary")
         self.progress.setDoubleValue_(0)
         self.set_status("trimming")
         config = {
@@ -800,12 +841,39 @@ class MacClipperController(NSObject):
             "min_event_seconds": float(str(self.min_event_field.stringValue())),
             "copy_streams": bool(self.copy_check.state()),
         }
+        self.append_log(self.estimate_log_message(config) + "\n")
         self.run_worker(lambda: self.job_worker(config))
 
     @objc.python_method
     def parse_optional_float(self, field) -> float | None:
         text = str(field.stringValue()).strip()
         return float(text) if text else None
+
+    @objc.python_method
+    def selected_video_duration(self) -> float:
+        if self.selected_video is None:
+            return 0.0
+        selected = str(self.selected_video)
+        for video in self.videos:
+            if str(video.path) == selected:
+                return float(video.duration or 0.0)
+        return 0.0
+
+    @objc.python_method
+    def estimate_label(self, config: dict[str, Any]) -> str:
+        low, high = estimate_minutes_range(
+            self.selected_video_duration(),
+            config.get("max_seconds"),
+            int(config.get("framerate") or 0),
+            bool(config.get("copy_streams")),
+        )
+        if high <= 1:
+            return self.text("estimate_under_minute")
+        return self.text("estimate_minutes", low=low, high=high)
+
+    @objc.python_method
+    def estimate_log_message(self, config: dict[str, Any]) -> str:
+        return self.text("estimate_log", estimate=self.estimate_label(config))
 
     @objc.python_method
     def job_worker(self, config: dict[str, Any]) -> None:
@@ -870,6 +938,7 @@ class MacClipperController(NSObject):
                 self.handle_player_done()
             elif kind == "worker_done":
                 self.start_button.setEnabled_(True)
+                self.set_button_text(self.start_button, self.text("start"), "primary")
                 if self.status_key in {"trimming", "preview_generating", "high_playing"}:
                     self.set_status("done")
 
