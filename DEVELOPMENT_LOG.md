@@ -2,6 +2,17 @@
 
 ## 2026-05-13
 
+### 文档记录：README 增加双平台互相介绍
+
+- 需求来源：
+  - 用户要求 macOS 和 Windows 版本的 README 互相介绍对方版本，方便不同系统用户找到正确仓库。
+- 本次修改：
+  - macOS README 在中文和英文说明中新增 Windows 版仓库介绍。
+  - 说明 Windows 版使用 PySide6、Windows 专用打包脚本和 exe 发布流程。
+  - 明确本仓库只维护 macOS AppKit 版本，两个平台会尽量同步核心剪辑体验，但 UI、打包和更新检查分别维护。
+- Windows 同步提示：
+  - Windows README 也会通过临时克隆更新，不恢复本地 Windows 项目目录。
+
 ### 文档记录：重写双语 README
 
 - 需求来源：

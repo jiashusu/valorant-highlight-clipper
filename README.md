@@ -16,6 +16,12 @@ This is a native macOS desktop app that scans VALORANT recordings, detects kill-
 
 它是纯桌面版：不打开浏览器，不启动本地网页服务，所有路径选择、扫描、剪辑、预览、删除和更新检查都在 App 窗口里完成。
 
+### 相关版本
+
+- Windows 版仓库：[jiashusu/valorant-highlight-clipper-windows](https://github.com/jiashusu/valorant-highlight-clipper-windows)
+- 如果你在 Windows 上使用，请下载 Windows 版；它使用 PySide6 桌面界面、Windows 专用打包脚本和 exe 发布流程。
+- 本仓库只维护 macOS AppKit 版本。两个版本会尽量同步核心剪辑体验，但 UI、打包方式和更新检查入口会按系统分别维护。
+
 ### 功能亮点
 
 - 原生 macOS AppKit 桌面界面，暗色 Apple 黑灰玻璃风。
@@ -168,6 +174,12 @@ App 会检查 `jiashusu/valorant-highlight-clipper` 的 macOS 构建信息，发
 `Valorant Highlight Clipper` is a local macOS desktop app for turning VALORANT recordings into highlight clips. It scans the kill-feed area in each video, detects kill events, merges nearby events, and exports short mp4 clips around those moments.
 
 The app is fully desktop-native. It does not open a browser or start a local web server. File selection, scanning, clipping, previewing, deletion, and update checks all happen inside the app window.
+
+### Related Version
+
+- Windows repository: [jiashusu/valorant-highlight-clipper-windows](https://github.com/jiashusu/valorant-highlight-clipper-windows)
+- If you use Windows, download the Windows version. It uses a PySide6 desktop UI, Windows-specific packaging scripts, and an exe release flow.
+- This repository maintains the macOS AppKit version only. The two versions aim to share the same clipping workflow, while UI, packaging, and update checks are maintained separately for each platform.
 
 ### Features
 
