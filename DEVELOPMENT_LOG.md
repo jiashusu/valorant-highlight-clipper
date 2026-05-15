@@ -2,6 +2,18 @@
 
 ## 2026-05-13
 
+### 文档记录：重写双语 README
+
+- 需求来源：
+  - 用户要求认真重写 `jiashusu/valorant-highlight-clipper` 的 README，并提供中英文说明。
+- 本次修改：
+  - README 改为中文在前、英文在后的双语项目主页。
+  - 增加项目定位、功能亮点、下载使用、源码运行、macOS 打包、项目结构、已知限制和常见问题。
+  - 明确当前仓库维护 macOS 版本，Windows 版本不在本仓库维护。
+  - 补充非 Riot Games 官方项目声明，避免误导用户。
+- Windows 同步提示：
+  - 本次只更新 mac 主仓库文档；Windows 仓库和本地 macOS App 产物不变。
+
 ### 同步记录：参考 Windows v1.4.2 增加提示与预计耗时
 
 - 需求来源：
