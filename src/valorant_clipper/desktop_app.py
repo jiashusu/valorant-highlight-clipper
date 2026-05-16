@@ -25,10 +25,10 @@ from .core import (
 )
 from .build_info import BUILD_SHA
 from .update_checker import UpdateResult, check_for_update
+from .version import APP_VERSION
 
 
 APP_TITLE = "Valorant 高光剪辑"
-APP_VERSION = "macOS v1.3.2"
 UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 THUMBNAIL_WIDTH = 384
 THUMBNAIL_HEIGHT = 216
@@ -626,7 +626,7 @@ class DesktopApp:
             self.status.set(f"有新版本: {result.remote_short}")
             should_open = messagebox.askyesno(
                 APP_TITLE,
-                f"{result.message}\n\n是否打开 GitHub Actions 下载新版 macOS App？",
+                f"{result.message}\n\n是否打开 GitHub Release 下载新版 macOS App？",
             )
             if should_open:
                 webbrowser.open(result.download_url)

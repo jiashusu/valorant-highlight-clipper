@@ -71,10 +71,10 @@ from .core import (
 )
 from .preview_cache import CARD_PREVIEW_FPS, PreviewCache
 from .update_checker import UpdateResult, check_for_update
+from .version import APP_VERSION
 
 
 APP_TITLE = "Valorant 高光剪辑"
-APP_VERSION = "macOS v1.3.2"
 AUTHOR_URL = "https://github.com/jiashusu/valorant-highlight-clipper"
 UPDATE_CHECK_INTERVAL_SECONDS = 30 * 60
 VIDEO_EXTENSIONS = ["mp4", "mov", "mkv", "avi", "m4v", "flv"]
@@ -199,7 +199,7 @@ TEXTS = {
         "estimate_under_minute": "约 1 分钟内",
         "estimate_minutes": "约 {low}-{high} 分钟",
         "estimate_log": "预计可能需要：{estimate}。导出时间取决于视频长度、电脑性能、识别帧率和导出设置。处理时可以去喝杯茶，放松一下。",
-        "update_open": "{message}\n\n是否打开 GitHub Actions 下载新版 macOS App？",
+        "update_open": "{message}\n\n是否打开 GitHub Release 下载新版 macOS App？",
     },
     "en": {
         "app_title": "Valorant Highlight Clipper",
@@ -278,7 +278,7 @@ TEXTS = {
         "estimate_under_minute": "about under 1 minute",
         "estimate_minutes": "about {low}-{high} minutes",
         "estimate_log": "Estimated time: {estimate}. Export time depends on video length, Mac performance, scan FPS, and export settings. You can grab a drink and relax while it runs.",
-        "update_open": "{message}\n\nOpen GitHub Actions to download the new macOS App?",
+        "update_open": "{message}\n\nOpen GitHub Releases to download the new macOS App?",
     },
 }
 

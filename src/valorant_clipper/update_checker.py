@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -9,12 +10,13 @@ import urllib.request
 from dataclasses import dataclass
 
 from .build_info import BUILD_DATE, BUILD_SHA
+from .version import APP_RELEASE_VERSION, APP_VERSION
 
 
 REPO = "jiashusu/valorant-highlight-clipper"
 BRANCH = "main"
 REPO_URL = f"https://github.com/{REPO}"
-DOWNLOAD_URL = f"{REPO_URL}/actions/workflows/build-desktop.yml"
+DOWNLOAD_URL = f"{REPO_URL}/releases/latest"
 
 
 @dataclass
@@ -50,29 +52,121 @@ def shas_match(current_sha: str, remote_sha: str | None) -> bool:
 
 def check_for_update() -> UpdateResult:
     current_sha = BUILD_SHA.strip() or "unknown"
-    remote_sha = fetch_remote_sha()
+    latest_release = fetch_latest_release()
+    latest_tag = latest_release.get("tag_name", "").strip()
+    latest_version = release_version_from_tag(latest_tag)
+
+    if latest_version and not is_remote_version_newer(APP_RELEASE_VERSION, latest_version):
+        return UpdateResult(
+            current_sha=current_sha,
+            remote_sha=latest_tag,
+            update_available=False,
+            message=f"已经是最新版本。当前: {APP_VERSION}，最新发布: {latest_tag}，打包时间: {BUILD_DATE}",
+        )
+
+    remote_sha = str(latest_release.get("target_commitish", "")).strip() or fetch_remote_sha()
     if current_sha == "unknown":
         return UpdateResult(
             current_sha=current_sha,
-            remote_sha=remote_sha,
+            remote_sha=latest_tag or remote_sha,
             update_available=False,
-            message=f"当前 App 没有打包版本信息。最新提交: {short_sha(remote_sha)}",
+            message=f"当前 App 没有打包版本信息。最新发布: {latest_tag or short_sha(remote_sha)}",
         )
 
     if shas_match(current_sha, remote_sha):
         return UpdateResult(
             current_sha=current_sha,
-            remote_sha=remote_sha,
+            remote_sha=latest_tag or remote_sha,
             update_available=False,
             message=f"已经是最新版本。当前: {short_sha(current_sha)}，打包时间: {BUILD_DATE}",
         )
 
     return UpdateResult(
         current_sha=current_sha,
-        remote_sha=remote_sha,
+        remote_sha=latest_tag or remote_sha,
         update_available=True,
-        message=f"发现新版本。当前: {short_sha(current_sha)}，最新: {short_sha(remote_sha)}",
+        message=f"发现新版本。当前: {APP_VERSION}，最新发布: {latest_tag or short_sha(remote_sha)}",
     )
+
+
+def release_version_from_tag(tag_name: str) -> str | None:
+    match = re.search(r"v?(\d+(?:\.\d+){1,3})(?:[-_].*)?$", tag_name.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split(".") if part.isdigit())
+
+
+def is_remote_version_newer(current_version: str, remote_version: str) -> bool:
+    return version_tuple(remote_version) > version_tuple(current_version)
+
+
+def fetch_latest_release() -> dict[str, str]:
+    errors: list[str] = []
+    try:
+        return fetch_latest_release_public()
+    except Exception as exc:
+        errors.append(f"GitHub API: {exc}")
+
+    try:
+        return fetch_latest_release_with_gh()
+    except Exception as exc:
+        errors.append(f"gh CLI: {exc}")
+
+    raise RuntimeError("无法检查更新。" + "；".join(errors))
+
+
+def fetch_latest_release_public() -> dict[str, str]:
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO}/releases/latest",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "ValorantHighlightClipper",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"HTTP {exc.code}") from exc
+    return {
+        "tag_name": str(payload.get("tag_name", "")).strip(),
+        "target_commitish": str(payload.get("target_commitish", "")).strip(),
+    }
+
+
+def fetch_latest_release_with_gh() -> dict[str, str]:
+    gh_path = find_gh()
+    if not gh_path:
+        raise RuntimeError("未找到 gh 命令")
+
+    result = subprocess.run(
+        [
+            gh_path,
+            "api",
+            f"repos/{REPO}/releases/latest",
+            "--jq",
+            "{tag_name: .tag_name, target_commitish: .target_commitish}",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        env=github_cli_env(),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "gh api failed")
+    try:
+        payload = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("gh response was not JSON") from exc
+    return {
+        "tag_name": str(payload.get("tag_name", "")).strip(),
+        "target_commitish": str(payload.get("target_commitish", "")).strip(),
+    }
 
 
 def fetch_remote_sha() -> str:

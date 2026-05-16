@@ -2,6 +2,18 @@
 
 ## 2026-05-16
 
+### 修复记录：更新检查改为按 Release 版本判断
+
+- 需求来源：
+  - 用户反馈当前 App 已经是 `macOS v1.3.2`，但因为 README/workflow 提交导致检查更新仍提示下载新版。
+- 本次修改：
+  - 更新检查从直接比较 `main` 分支最新 commit，改为优先读取 GitHub Latest Release。
+  - 当前 `macOS v1.3.2` 对应远端 `v1.3.2-macos` 时视为已是最新，不再因为文档或发布脚本提交误报。
+  - 只有远端 Release tag 版本号高于当前 App 版本时，才提示下载新版。
+  - 下载入口文案从 GitHub Actions 改为 GitHub Release。
+- Windows 同步提示：
+  - Windows 端也建议改为按 Release tag/version 判断更新，避免普通提交触发误报。
+
 ### 发布记录：新增 macOS GitHub Release 自动发布
 
 - 需求来源：
