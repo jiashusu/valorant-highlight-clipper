@@ -1,5 +1,19 @@
 # 开发日志
 
+## 2026-05-16
+
+### 发布记录：新增 macOS GitHub Release 自动发布
+
+- 需求来源：
+  - 用户发现 macOS 仓库没有 GitHub Release，只有 Actions 构建产物。
+- 本次修改：
+  - 保留 `main` 分支 push 时自动构建并上传 Actions artifact。
+  - 新增 `v*-macos` tag 触发 Release 发布流程。
+  - tag 构建完成后自动创建 GitHub Release，并上传 `ValorantHighlightClipper-macOS.zip`。
+  - 为 workflow 增加 `contents: write` 权限，允许 Actions 创建 Release。
+- Windows 同步提示：
+  - Windows 端可参考同样思路，用 `v*-windows` tag 触发 exe/zip Release 发布。
+
 ## 2026-05-13
 
 ### 文档记录：README 增加双平台互相介绍

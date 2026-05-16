@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags:
+      - "v*-macos"
+
+permissions:
+  contents: write
 
 jobs:
   macos:
@@ -25,3 +30,16 @@ jobs:
         with:
           name: ValorantHighlightClipper-macOS
           path: dist/ValorantHighlightClipper-macOS.zip
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Valorant Highlight Clipper macOS ${{ github.ref_name }}
+          files: dist/ValorantHighlightClipper-macOS.zip
+          generate_release_notes: true
+          body: |
+            macOS native AppKit build for Valorant Highlight Clipper.
+
+            Download `ValorantHighlightClipper-macOS.zip`, unzip it, then open `ValorantHighlightClipper.app`.
+
+            If macOS blocks the app on first launch, right-click the app and choose Open.
