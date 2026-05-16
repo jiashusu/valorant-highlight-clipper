@@ -1,5 +1,7 @@
 # Valorant Highlight Clipper for macOS
 
+<img width="1832" height="1079" alt="截屏2026-05-15 下午10 49 44" src="https://github.com/user-attachments/assets/f5fb0174-268a-4b83-afca-5d05426d4833" />
+
 一款本地运行的 macOS 原生桌面 App，用来扫描 VALORANT 录屏、识别击杀信息区域，并自动导出高光片段。
 
 This is a native macOS desktop app that scans VALORANT recordings, detects kill-feed events, and exports highlight clips locally.
