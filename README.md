@@ -126,7 +126,7 @@ dist/ValorantHighlightClipper.app
 打包时会写入当前 Git 提交作为构建号，App 顶部会显示类似：
 
 ```text
-macOS v1.3.2 · 0a2fcf0
+macOS v1.3.3 · 0a2fcf0
 ```
 
 ### 项目结构
@@ -285,7 +285,7 @@ dist/ValorantHighlightClipper.app
 The build script writes the current Git commit into the app, so the UI can show a short build identifier such as:
 
 ```text
-macOS v1.3.2 · 0a2fcf0
+macOS v1.3.3 · 0a2fcf0
 ```
 
 ### Project Layout

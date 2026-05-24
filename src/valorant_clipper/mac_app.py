@@ -55,7 +55,7 @@ from AppKit import (
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
 )
-from Foundation import NSAttributedString, NSMakeRange, NSObject
+from Foundation import NSIndexSet, NSAttributedString, NSMakeRange, NSObject, NSNotFound
 from PyObjCTools import AppHelper
 
 from .build_info import BUILD_SHA
@@ -65,6 +65,7 @@ from .core import (
     DEFAULT_SOURCE_DIR,
     VideoInfo,
     discover_videos,
+    get_video_info,
     hidden_subprocess_kwargs,
     process_video,
     resolve_tool,
@@ -131,6 +132,7 @@ TEXTS = {
         "source": "素材文件夹或视频文件",
         "choose_folder": "选择文件夹",
         "choose_video": "选择视频",
+        "source_selected_files": "已选择 {count} 个视频",
         "recursive": "递归扫描",
         "output_dir": "输出目录",
         "choose_output": "选择输出目录",
@@ -179,8 +181,8 @@ TEXTS = {
         "up_to_date": "已是最新版本",
         "update_failed": "检查更新失败",
         "new_version": "有新版本: {version}",
-        "scan_done": "扫描完成: {count} 个视频",
-        "select_video_first": "请先扫描并选择一个视频。",
+        "scan_done": "扫描完成: {count} 个视频（默认会一起处理）",
+        "select_video_first": "请先扫描或选择至少一个视频。",
         "busy": "当前任务还在运行，请等它完成。",
         "cut_failed": "剪辑失败: {error}",
         "scan_failed": "扫描失败: {error}",
@@ -195,6 +197,10 @@ TEXTS = {
         "delete_failed": "删除失败: {error}",
         "deleted_log": "已删除片段: {name}\n",
         "finished_log": "完成，导出 {count} 个片段\n",
+        "batch_start_log": "开始批量处理 {count} 个视频\n",
+        "batch_video_log": "[{index}/{total}] 处理视频: {name}\n",
+        "batch_video_done": "[{index}/{total}] 完成: {name}，导出 {count} 个片段\n",
+        "batch_video_failed": "[{index}/{total}] 跳过: {name}，错误: {error}\n",
         "clip_info": "约 {kills} 杀 · {duration:.2f}s\n{start:.2f}s - {end:.2f}s",
         "estimate_under_minute": "约 1 分钟内",
         "estimate_minutes": "约 {low}-{high} 分钟",
@@ -210,6 +216,7 @@ TEXTS = {
         "source": "Source folder or video file",
         "choose_folder": "Folder",
         "choose_video": "Video",
+        "source_selected_files": "{count} videos selected",
         "recursive": "Recursive",
         "output_dir": "Output folder",
         "choose_output": "Choose output",
@@ -258,8 +265,8 @@ TEXTS = {
         "up_to_date": "Up to date",
         "update_failed": "Update failed",
         "new_version": "New version: {version}",
-        "scan_done": "Scan complete: {count} videos",
-        "select_video_first": "Scan and select a video first.",
+        "scan_done": "Scan complete: {count} videos (all selected by default)",
+        "select_video_first": "Scan or choose at least one video first.",
         "busy": "Another task is still running.",
         "cut_failed": "Clipping failed: {error}",
         "scan_failed": "Scan failed: {error}",
@@ -274,6 +281,10 @@ TEXTS = {
         "delete_failed": "Delete failed: {error}",
         "deleted_log": "Deleted clip: {name}\n",
         "finished_log": "Done, exported {count} clips\n",
+        "batch_start_log": "Starting batch: {count} videos\n",
+        "batch_video_log": "[{index}/{total}] Processing video: {name}\n",
+        "batch_video_done": "[{index}/{total}] Done: {name}, exported {count} clips\n",
+        "batch_video_failed": "[{index}/{total}] Skipped: {name}, error: {error}\n",
         "clip_info": "~{kills} kills · {duration:.2f}s\n{start:.2f}s - {end:.2f}s",
         "estimate_under_minute": "about under 1 minute",
         "estimate_minutes": "about {low}-{high} minutes",
@@ -475,6 +486,7 @@ class MacClipperController(NSObject):
         self.videos: list[VideoInfo] = []
         self.clips: list[ClipSegment] = []
         self.selected_video: Path | None = None
+        self.explicit_video_paths: list[Path] = []
         self.selected_clip_index: int | None = None
         self.worker_thread: threading.Thread | None = None
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -691,6 +703,7 @@ class MacClipperController(NSObject):
         scroll = NSScrollView.alloc().initWithFrame_(frame)
         table = NSTableView.alloc().initWithFrame_(NSMakeRect(0, 0, frame.size.width, frame.size.height))
         table.setSelectionHighlightStyle_(NSTableViewSelectionHighlightStyleRegular)
+        table.setAllowsMultipleSelection_(True)
         table.setUsesAlternatingRowBackgroundColors_(False)
         table.setGridStyleMask_(0)
         table.setRowHeight_(26)
@@ -769,6 +782,7 @@ class MacClipperController(NSObject):
         panel.setCanChooseFiles_(False)
         panel.setAllowsMultipleSelection_(False)
         if panel.runModal() == NSModalResponseOK:
+            self.explicit_video_paths = []
             self.source_field.setStringValue_(panel.URL().path())
             self.scanVideos_(None)
 
@@ -776,11 +790,16 @@ class MacClipperController(NSObject):
         panel = NSOpenPanel.openPanel()
         panel.setCanChooseDirectories_(False)
         panel.setCanChooseFiles_(True)
-        panel.setAllowsMultipleSelection_(False)
+        panel.setAllowsMultipleSelection_(True)
         panel.setAllowedFileTypes_(VIDEO_EXTENSIONS)
         if panel.runModal() == NSModalResponseOK:
-            self.source_field.setStringValue_(panel.URL().path())
-            self.scanVideos_(None)
+            self.explicit_video_paths = [Path(url.path()) for url in panel.URLs()]
+            if len(self.explicit_video_paths) == 1:
+                self.source_field.setStringValue_(str(self.explicit_video_paths[0]))
+            else:
+                self.source_field.setStringValue_(self.text("source_selected_files", count=len(self.explicit_video_paths)))
+            self.set_status("scanning")
+            self.run_worker(lambda: self.scan_explicit_files_worker(self.explicit_video_paths))
 
     def chooseOutputDir_(self, _sender) -> None:
         panel = NSOpenPanel.openPanel()
@@ -798,6 +817,11 @@ class MacClipperController(NSObject):
     def scanVideos_(self, _sender) -> None:
         source = Path(str(self.source_field.stringValue())).expanduser()
         recursive = bool(self.recursive_check.state())
+        if self.explicit_video_paths and not source.exists():
+            self.set_status("scanning")
+            self.run_worker(lambda: self.scan_explicit_files_worker(self.explicit_video_paths))
+            return
+        self.explicit_video_paths = []
         self.set_status("scanning")
         self.run_worker(lambda: self.scan_worker(source, recursive))
 
@@ -811,13 +835,22 @@ class MacClipperController(NSObject):
         finally:
             self.events.put(("worker_done", None))
 
+    @objc.python_method
+    def scan_explicit_files_worker(self, paths: list[Path]) -> None:
+        try:
+            videos = [get_video_info(path.expanduser()) for path in paths]
+            self.events.put(("videos", videos))
+        except Exception as exc:
+            self.events.put(("error", self.text("scan_failed", error=exc)))
+        finally:
+            self.events.put(("worker_done", None))
+
     def startJob_(self, _sender) -> None:
         if self.worker_thread and self.worker_thread.is_alive():
             self.show_alert(self.text("busy"))
             return
-        if self.selected_video is None:
-            self.select_first_video()
-        if self.selected_video is None:
+        video_paths = self.selected_video_paths()
+        if not video_paths:
             self.show_alert(self.text("select_video_first"))
             return
         self.stop_preview()
@@ -829,7 +862,7 @@ class MacClipperController(NSObject):
         self.progress.setDoubleValue_(0)
         self.set_status("trimming")
         config = {
-            "video_path": self.selected_video,
+            "video_paths": video_paths,
             "output_dir": Path(str(self.output_field.stringValue())).expanduser(),
             "confidence": float(str(self.confidence_field.stringValue())),
             "framerate": int(float(str(self.framerate_field.stringValue()))),
@@ -850,19 +883,34 @@ class MacClipperController(NSObject):
         return float(text) if text else None
 
     @objc.python_method
-    def selected_video_duration(self) -> float:
-        if self.selected_video is None:
-            return 0.0
-        selected = str(self.selected_video)
+    def selected_video_paths(self) -> list[Path]:
+        if not self.videos:
+            return []
+        rows: list[int] = []
+        indexes = self._video_table_view.selectedRowIndexes()
+        row = indexes.firstIndex()
+        while row != NSNotFound:
+            if 0 <= row < len(self.videos):
+                rows.append(int(row))
+            row = indexes.indexGreaterThanIndex_(row)
+        if not rows:
+            rows = list(range(len(self.videos)))
+        return [Path(self.videos[row].path) for row in rows]
+
+    @objc.python_method
+    def selected_videos_duration(self, video_paths: list[Path]) -> float:
+        selected = {str(path) for path in video_paths}
+        total = 0.0
         for video in self.videos:
-            if str(video.path) == selected:
-                return float(video.duration or 0.0)
-        return 0.0
+            if str(video.path) in selected:
+                total += float(video.duration or 0.0)
+        return total
 
     @objc.python_method
     def estimate_label(self, config: dict[str, Any]) -> str:
+        video_paths = list(config.get("video_paths") or [])
         low, high = estimate_minutes_range(
-            self.selected_video_duration(),
+            self.selected_videos_duration(video_paths),
             config.get("max_seconds"),
             int(config.get("framerate") or 0),
             bool(config.get("copy_streams")),
@@ -878,12 +926,52 @@ class MacClipperController(NSObject):
     @objc.python_method
     def job_worker(self, config: dict[str, Any]) -> None:
         try:
-            def progress(message: str, value: float | None = None) -> None:
-                self.events.put(("log", f"{message}\n"))
-                if value is not None:
-                    self.events.put(("progress", value))
+            video_paths = list(config.pop("video_paths"))
+            total = len(video_paths)
+            clips: list[ClipSegment] = []
+            self.events.put(("log", self.text("batch_start_log", count=total)))
+            for index, video_path in enumerate(video_paths, start=1):
+                self.events.put(("log", self.text("batch_video_log", index=index, total=total, name=video_path.name)))
 
-            clips = process_video(progress=progress, **config)
+                def video_progress(message: str, value: float | None = None, video_index: int = index) -> None:
+                    self.events.put(("log", f"{message}\n"))
+                    if value is not None:
+                        overall = ((video_index - 1) + value) / max(1, total)
+                        self.events.put(("progress", overall))
+
+                try:
+                    video_clips = process_video(
+                        video_path=video_path,
+                        progress=video_progress,
+                        **config,
+                    )
+                except Exception as exc:
+                    self.events.put(
+                        (
+                            "log",
+                            self.text(
+                                "batch_video_failed",
+                                index=index,
+                                total=total,
+                                name=video_path.name,
+                                error=exc,
+                            ),
+                        )
+                    )
+                    continue
+                clips.extend(video_clips)
+                self.events.put(
+                    (
+                        "log",
+                        self.text(
+                            "batch_video_done",
+                            index=index,
+                            total=total,
+                            name=video_path.name,
+                            count=len(video_clips),
+                        ),
+                    )
+                )
             self.events.put(("clips", clips))
         except Exception as exc:
             self.events.put(("error", self.text("cut_failed", error=exc)))
@@ -1008,7 +1096,7 @@ class MacClipperController(NSObject):
         self.videos = list(videos)
         self.selected_video = None
         self._video_table_view.reloadData()
-        self.select_first_video()
+        self.select_all_videos()
         self.set_status("scan_done", count=len(self.videos))
 
     def numberOfRowsInTableView_(self, _tableView) -> int:
@@ -1036,6 +1124,15 @@ class MacClipperController(NSObject):
             self.selected_video = None
             return
         self._video_table_view.selectRowIndexes_byExtendingSelection_(objc.lookUpClass("NSIndexSet").indexSetWithIndex_(0), False)
+        self.selected_video = Path(self.videos[0].path)
+
+    @objc.python_method
+    def select_all_videos(self) -> None:
+        if not self.videos:
+            self.selected_video = None
+            return
+        indexes = NSIndexSet.indexSetWithIndexesInRange_(NSMakeRange(0, len(self.videos)))
+        self._video_table_view.selectRowIndexes_byExtendingSelection_(indexes, False)
         self.selected_video = Path(self.videos[0].path)
 
     @objc.python_method
